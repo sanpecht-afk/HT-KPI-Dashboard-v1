@@ -728,7 +728,7 @@ function exportFineLog(plate){
   exportToXLSX(rows,'fine_adjustment_log.xlsx','FineLog');
 }
 function refreshFineData(){
-  if(FINE_UPLOAD.active){ DATA.trip_details.forEach(l=>{ const u=fineUpFind(fineKeyLeg(l)); l.fine=u?u.newFine:0; l.fine_req=u?u.requester:''; l.fine_reqdate=u?u.reqDate:''; });
+  if(FINE_UPLOAD.active){ const _mm=fineMatchAll(DATA.trip_details,fineKeyLeg); DATA.trip_details.forEach((l,_i)=>{ const u=_mm[_i]; l.fine=u?u.newFine:0; l.fine_req=u?u.requester:''; l.fine_reqdate=u?u.reqDate:''; });
     const a=DATA.trip_details.reduce((s,l)=>s+(l.fine||0),0); window.__fineRefresh={ts:new Date().toLocaleString('th-TH'),changed:0,sys:a,act:a,adj:FINE_UPLOAD.rows.length}; return; }
   const legs = DATA.trip_details, best = {}; let changed = 0;
   legs.forEach(l=>{ l.fine_raw = l.result_gps==='Delay' ? fineOfJS(l.delay_min) : 0;
@@ -3691,11 +3691,18 @@ function fkN(s){ return String(s==null?'':s).trim().replace(/\s+/g,' '); }
 function fineKeyRow(r){ const p=[r.ticket,r.plate,r.opDateStr,r.departGpsStr,r.routeName].map(fkN); return {k:p.join('|'), f:p.slice(0,3).join('|')}; }
 function fineKeyLeg(l){ const p=[l['เลขที่ใบรายการ'],l['ทะเบียนรถ'],l['วันที่'],l['เวลาออกGPS'],l['ชื่อเส้นทาง']].map(fkN); return {k:p.join('|'), f:p.slice(0,3).join('|')}; }
 function fineUpFind(kk){ const U=FINE_UPLOAD; let u=U.map.get(kk.k); if(!u){ const c=U.fmap.get(kk.f); if(c && c.length===1) u=c[0]; } return u; }
+function fineMatchAll(items,keyFn){
+  const U=FINE_UPLOAD, res=new Array(items.length).fill(null), claimed=new Set(), ks=items.map(keyFn);
+  ks.forEach((kk,i)=>{ const u=U.map.get(kk.k); if(u && !claimed.has(u.idx)){ res[i]=u; claimed.add(u.idx); } });
+  ks.forEach((kk,i)=>{ if(res[i]) return; const c=U.fmap.get(kk.f); if(c && c.length===1 && !claimed.has(c[0].idx)){ res[i]=c[0]; claimed.add(c[0].idx); } });
+  return res;
+}
 function applyUploadedFines(rows){
   const U=FINE_UPLOAD; if(!U.active) return;
-  rows.forEach(r=>{
+  const mm=fineMatchAll(rows,fineKeyRow);
+  rows.forEach((r,i)=>{
     r.fine_sys = r.fine;
-    const u = fineUpFind(fineKeyRow(r));
+    const u = mm[i];
     if(u){ r.fine=u.newFine; r.fine_req=u.requester; r.fine_reqdate=u.reqDate; r.fine_up=true; U.matched.add(u.idx); }
     else { r.fine=0; r.fine_req=''; r.fine_reqdate=''; r.fine_up=false; }
   });
@@ -3725,8 +3732,15 @@ function parseFineUploadSheet(A){
   if(!rows.length) throw new Error('ไม่พบแถวข้อมูลในไฟล์');
   return {rows, blank};
 }
+function dedupeByTicket(rows){
+  const best=new Map();
+  rows.forEach(r=>{ if(!r.ticket) return; const c=best.get(r.ticket); if(!c || r.newFine>c.newFine) best.set(r.ticket,r); });
+  const keep=[], drop=[];
+  rows.forEach(r=>{ if(!r.ticket || best.get(r.ticket)===r) keep.push(r); else { r.idx=null; drop.push(r); } });
+  return {keep,drop};
+}
 function setFineUpload(obj){
-  const U=FINE_UPLOAD; U.active=true; U.fileName=obj.fileName; U.uploadedAt=obj.uploadedAt; U.rows=obj.rows; U.blank=obj.blank||0;
+  const U=FINE_UPLOAD; U.active=true; U.fileName=obj.fileName; U.uploadedAt=obj.uploadedAt; { const dd=dedupeByTicket(obj.rows); U.rows=dd.keep; U.dups=dd.drop; } U.blank=obj.blank||0;
   U.map=new Map(); U.fmap=new Map(); U.byPlate={}; U.matched=new Set();
   U.rows.forEach((u,i)=>{ u.idx=i;
     const p=[u.ticket,u.plate,u.day,u.dep,u.route]; U.map.set(p.join('|'),u);
@@ -3748,8 +3762,8 @@ function handleFineUpload(file){
     const wb=XLSX.read(new Uint8Array(e.target.result),{type:'array',cellDates:true});
     const A=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,raw:true,defval:null});
     const p=parseFineUploadSheet(A);
-    const sOld=p.rows.reduce((a,r)=>a+r.sysFine,0), sNew=p.rows.reduce((a,r)=>a+r.newFine,0), nReq=p.rows.filter(r=>r.requester).length;
-    if(!confirm(`นำเข้าไฟล์ "${file.name}"\n• ${fmt(p.rows.length)} แถว · ผู้ขอ ${fmt(nReq)} รายการ\n• ค่าปรับเดิม ${fmt(sOld)} → หลังปรับปรุง ${fmt(sNew)} บาท\n\nระบบจะคำนวณค่าปรับทุกชีทใหม่ โดยยึดจากไฟล์นี้เท่านั้น (เที่ยวที่ไม่อยู่ในไฟล์ = ไม่มีค่าปรับ) ดำเนินการต่อหรือไม่?`)) return;
+    const dd=dedupeByTicket(p.rows), sOld=dd.keep.reduce((a,r)=>a+r.sysFine,0), sNew=dd.keep.reduce((a,r)=>a+r.newFine,0), nReq=dd.keep.filter(r=>r.requester).length;
+    if(!confirm(`นำเข้าไฟล์ "${file.name}"\n• ${fmt(p.rows.length)} แถว${dd.drop.length?` (ตัดเลขที่ใบรายการซ้ำ ${fmt(dd.drop.length)} แถว เหลือ ${fmt(dd.keep.length)} แถว)`:''} · ผู้ขอ ${fmt(nReq)} รายการ\n• ค่าปรับเดิม ${fmt(sOld)} → หลังปรับปรุง ${fmt(sNew)} บาท\n\nระบบจะคำนวณค่าปรับทุกชีทใหม่ โดยยึดจากไฟล์นี้เท่านั้น (เที่ยวที่ไม่อยู่ในไฟล์ = ไม่มีค่าปรับ) ดำเนินการต่อหรือไม่?`)) return;
     const obj={fileName:file.name, uploadedAt:new Date().toLocaleString('th-TH'), rows:p.rows, blank:p.blank};
     setFineUpload(obj);
     try{ localStorage.setItem('htFineUpload_v1', JSON.stringify(obj)); }catch(err){}
@@ -3778,13 +3792,13 @@ function renderFineWaiver(){
   const sOld=U.rows.reduce((a,r)=>a+r.sysFine,0), sNew=U.rows.reduce((a,r)=>a+r.newFine,0), miss=U.rows.filter(r=>!U.matched.has(r.idx));
   const adj=U.rows.filter(r=>r.requester||r.newFine!==r.sysFine);
   const rq={}; U.rows.forEach(r=>{ if(r.requester) rq[r.requester]=(rq[r.requester]||0)+1; });
-  const exRows=a=>a.map(r=>({ทะเบียนรถ:r.plate,เลขที่ใบรายการ:r.ticket,วันที่วิ่ง:r.day,เวลาออกGPS:r.dep,เส้นทาง:r.route,ล่าช้านาที:r.delay,ค่าปรับเดิม:r.sysFine,ค่าปรับใหม่หลังปรับปรุง:r.newFine,ผู้ขอ:r.requester,วันที่ขอ:r.reqDate,การจับคู่:U.matched.has(r.idx)?'พบในระบบ':'ไม่พบ'}));
-  window.__fineWaiverRows=exRows(adj); window.__fineUpAllRows=exRows(U.rows);
+  const exRows=a=>a.map(r=>({ทะเบียนรถ:r.plate,เลขที่ใบรายการ:r.ticket,วันที่วิ่ง:r.day,เวลาออกGPS:r.dep,เส้นทาง:r.route,ล่าช้านาที:r.delay,ค่าปรับเดิม:r.sysFine,ค่าปรับใหม่หลังปรับปรุง:r.newFine,ผู้ขอ:r.requester,วันที่ขอ:r.reqDate,การจับคู่:r.idx==null?'ตัดออก (เลขที่ใบรายการซ้ำ)':(U.matched.has(r.idx)?'พบในระบบ':'ไม่พบ')}));
+  window.__fineWaiverRows=exRows(adj); window.__fineUpAllRows=exRows(U.rows.concat(U.dups||[]));
   el.innerHTML=`
   <div class="panel" style="margin:12px 0; border:1px solid var(--accent);">
     <h3>📑 รายการขอยกเว้น/ปรับปรุงค่าปรับ (ตามไฟล์ที่อัปโหลด)</h3>
     <div class="nodata-note">ไฟล์ <b>${fineEsc(U.fileName)}</b> · อัปโหลดเมื่อ ${fineEsc(U.uploadedAt)} · ${fmt(U.rows.length)} แถว · จับคู่กับข้อมูลได้ <b>${fmt(U.rows.length-miss.length)}</b>${miss.length?` · <b style="color:var(--red-strong)">ไม่พบในข้อมูล ${fmt(miss.length)} แถว</b> (ไม่ถูกนำมาคำนวณ)`:''} · ค่าปรับเดิม ${fmt(sOld)} → <b>หลังปรับปรุง ${fmt(sNew)} บาท</b> (<span style="color:var(--green-strong)">ลด ${fmt(sOld-sNew)}</span>)${U.blank?` · ช่องค่าปรับใหม่ว่าง ${fmt(U.blank)} แถว ใช้ค่าเดิม`:''}<br>
-      ผู้ขอ: ${Object.keys(rq).map(k=>fineEsc(k)+' ('+rq[k]+' รายการ)').join(' · ')||'-'} · <b>ค่าปรับทุกชีทยึดตามไฟล์นี้เท่านั้น</b> (เที่ยวที่ไม่อยู่ในไฟล์ไม่มีค่าปรับ)</div>
+      ผู้ขอ: ${Object.keys(rq).map(k=>fineEsc(k)+' ('+rq[k]+' รายการ)').join(' · ')||'-'}${U.dups&&U.dups.length?`<br><b style="color:var(--red-strong)">ตัดเลขที่ใบรายการซ้ำ ${fmt(U.dups.length)} แถว:</b> ${U.dups.map(r=>fineEsc(r.ticket)+' ('+fineEsc(r.plate)+' · '+fineEsc(r.day)+' · '+fmt(r.newFine)+' บาท)').join(', ')} — เก็บแถวที่ค่าปรับสูงสุดของแต่ละใบรายการเพียงแถวเดียว`:''}<br><b>ค่าปรับทุกชีทยึดตามไฟล์นี้เท่านั้น</b> (เที่ยวที่ไม่อยู่ในไฟล์ไม่มีค่าปรับ)</div>
     <div class="toolbar"><div class="left"></div>
       <button class="exportBtn" onclick="exportToXLSX(window.__fineWaiverRows||[],'fine_waiver_requests.xlsx','Waiver')">Export รายการขอยกเว้น</button>
       <button class="exportBtn" onclick="exportToXLSX(window.__fineUpAllRows||[],'fine_upload_all.xlsx','FineUpload')">Export ทุกแถวตามไฟล์</button></div>
