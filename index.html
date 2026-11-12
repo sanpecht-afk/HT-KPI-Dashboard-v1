@@ -553,6 +553,7 @@ DATA.trip_details.forEach((t,i)=>{ t._id = i; });
 /* ===== LOGIC v2: จัดประเภทจากคอลัมน์ (เวลามาตรฐาน − เวลาจริง GPS) =====
    ล่าช้า > 30 นาที = Delay | ล่าช้า 0–30 นาที หรือมาก่อนเวลา = On Time | ไม่มีค่า = No Data
    ค่าปรับ: เริ่มนับเมื่อล่าช้า > 30 นาที (31–60 = 500 บาท, > 60 = 2,000 บาท) · ล่าช้า 1–30 นาที ไม่มีค่าปรับ */
+var FINE_UPLOAD = {active:false,fileName:'',uploadedAt:'',rows:[],map:new Map(),fmap:new Map(),byPlate:{},matched:new Set(),blank:0};
 const DELAY_THRESHOLD_MIN = 30;
 let LOGIC_COMPARE = null;
 function classifyByDiff(diffMin){
@@ -579,6 +580,7 @@ function applyOncePerDayFine(rows){
       if(best.get(k)!==r) r.fine = 0;
     }
   });
+  if(FINE_UPLOAD.active) applyUploadedFines(rows);
 }
 function applyNewLogicToLegs(rows){
   rows.forEach(r=>{
@@ -655,6 +657,7 @@ if(DATA.raw_legs_all && DATA.raw_legs_all.length){
 
 let FINE_OVERRIDES = {}; // key: leg._id -> {amount, reason, editor, ts, original}
 function effectiveFine(leg){
+  if(FINE_UPLOAD.active) return leg.fine||0;
   const o = FINE_OVERRIDES[leg._id];
   return o ? o.amount : (leg.fine||0);
 }
@@ -675,8 +678,8 @@ function restoreFineOverrides(){
 function fineSummaryMap(){
   const m = {};
   DATA.trip_details.forEach(l=>{
-    const o = FINE_OVERRIDES[l._id], sys = l.fine||0;
-    if(!sys && !o) return;
+    const o = FINE_OVERRIDES[l._id], sys = FINE_UPLOAD.active ? (l.fine_sys||0) : (l.fine||0);
+    if(!sys && !o && !(FINE_UPLOAD.active && l.fine)) return;
     const s = m[l['ทะเบียนรถ']] || (m[l['ทะเบียนรถ']] = {sys:0, act:0, edits:[]});
     s.sys += sys; s.act += effectiveFine(l);
     if(o) s.edits.push({leg:l, o});
@@ -725,6 +728,8 @@ function exportFineLog(plate){
   exportToXLSX(rows,'fine_adjustment_log.xlsx','FineLog');
 }
 function refreshFineData(){
+  if(FINE_UPLOAD.active){ DATA.trip_details.forEach(l=>{ const u=fineUpFind(fineKeyLeg(l)); l.fine=u?u.newFine:0; l.fine_req=u?u.requester:''; l.fine_reqdate=u?u.reqDate:''; });
+    const a=DATA.trip_details.reduce((s,l)=>s+(l.fine||0),0); window.__fineRefresh={ts:new Date().toLocaleString('th-TH'),changed:0,sys:a,act:a,adj:FINE_UPLOAD.rows.length}; return; }
   const legs = DATA.trip_details, best = {}; let changed = 0;
   legs.forEach(l=>{ l.fine_raw = l.result_gps==='Delay' ? fineOfJS(l.delay_min) : 0;
     if(l.fine_raw>0){ const k = normPlateJS(l['ทะเบียนรถ'])+'|'+l['วันที่']; if(!best[k] || l.fine_raw>best[k].fine_raw) best[k]=l; } });
@@ -1402,7 +1407,7 @@ function buildAggregatesFromLegs(ROWS, rawRowCount, fileName, excludedRows){
     'ชื่อเส้นทาง':r.routeName, 'จุดขึ้น':r.upPoint, 'จุดลง':r.downPoint,
     'เวลาออกGPS':r.departGpsStr, 'เวลาเข้าGPS':r.arriveGpsStr,
     'เวลามาตราฐาน':r.stdTimeRaw, 'HT_GPS':r.htGpsRaw,
-    'diff_gps':r.diffGpsRaw, result_gps:r.result_cat, delay_min:r.delay_min, fine:r.fine, fine_raw:r.fine_raw||0,
+    'diff_gps':r.diffGpsRaw, result_gps:r.result_cat, delay_min:r.delay_min, fine:r.fine, fine_raw:r.fine_raw||0, fine_sys:(r.fine_sys!=null?r.fine_sys:r.fine), fine_req:r.fine_req||'', fine_reqdate:r.fine_reqdate||'',
     'วันที่ปฏิทิน':r.calDateStr,
   }));
   trip_details.forEach((t,i)=>{ t._id = i; });
@@ -2145,6 +2150,7 @@ function drawVehTypeChart(){
 /* ===== MOCK-UP: ตรวจสอบค่าปรับ ===== */
 function renderFineAudit(){
   const el = document.getElementById('fineAuditPanel'); if(!el) return;
+  if(FINE_UPLOAD.active){ el.innerHTML=''; return; }
   const legs = DATA.trip_details, B = n=>fmt(n), late = l=>(l.delay_min||0);
   const dl = legs.filter(l=>l.result_gps==='Delay');
   const t0 = dl.filter(l=>late(l)<=60), t1 = dl.filter(l=>late(l)>60&&late(l)<=90), t2 = dl.filter(l=>late(l)>90);
@@ -2237,9 +2243,12 @@ function buildPenaltyTab(){
       <select id="penaltyDateTo">${opDays.map((d,i)=>`<option value="${d.date}" ${i===opDays.length-1?'selected':''}>${d.label}</option>`).join('')}</select>
       <button class="refreshBtn" id="penaltyRefreshBtn">🔄 Refresh</button>
       <button class="expandBtn" onclick="openFineAuditModal('ALL')">🧾 ประวัติการปรับปรุงทั้งหมด</button>
+      <label class="expandBtn" style="cursor:pointer;">📥 Upload ไฟล์ขอยกเว้นค่าปรับ<input type="file" id="fineUploadInput" accept=".xlsx,.xls" hidden></label>
+      <button class="expandBtn" id="fineUploadClear" style="display:none;">✖ ล้างไฟล์ขอยกเว้น</button>
     </div>
   </div>
   <div class="nodata-note" id="fineRefreshStamp"></div>
+  <div id="fineWaiverPanel"></div>
 
   <div class="toolbar">
     <div class="left">
@@ -2250,7 +2259,7 @@ function buildPenaltyTab(){
   </div>
   <div class="table-scroll">
     <table class="dashed" id="penaltyTable">
-      <thead><tr><th>ลำดับ</th><th data-key="ทะเบียนรถ">ทะเบียนรถ</th><th data-key="ชนิดรถ">ชนิดรถ</th><th data-key="count">จำนวนครั้ง</th><th data-key="avg_delay_min">ล่าช้าเฉลี่ย(นาที)</th><th data-key="total_fine">ค่าปรับรวม(บาท)</th><th>เส้นทาง / ภาคต้นทาง→ปลายทาง</th><th>สรุปค่าปรับ<br><span style="font-weight:400; font-size:11px;">ปรับจริง · ผู้ปรับปรุง · วันที่ · เหตุผล</span></th></tr></thead>
+      <thead><tr><th>ลำดับ</th><th data-key="ทะเบียนรถ">ทะเบียนรถ</th><th data-key="ชนิดรถ">ชนิดรถ</th><th data-key="count">จำนวนครั้ง</th><th data-key="avg_delay_min">ล่าช้าเฉลี่ย(นาที)</th><th data-key="total_fine">ค่าปรับรวม(บาท)</th><th>เส้นทาง / ภาคต้นทาง→ปลายทาง</th><th>สรุปค่าปรับ<br><span style="font-weight:400; font-size:11px;">ปรับจริง · ผู้ปรับปรุง · วันที่ · เหตุผล</span></th><th>ค่าปรับใหม่หลังปรับปรุง</th><th>ผู้ขอ</th><th>วันที่ขอ</th></tr></thead>
       <tbody></tbody><tfoot></tfoot>
     </table>
   </div>
@@ -2262,6 +2271,7 @@ function buildPenaltyTab(){
   `;
   document.getElementById('mainArea').appendChild(sec);
   renderFineAudit();
+  wireFineUpload(); renderFineWaiver();
   document.getElementById('exportPenaltyBtn').addEventListener('click', ()=>{
     const fsm = fineSummaryMap();
     const rows = filteredPenalty().map(r=>{ const s = fsm[r['ทะเบียนรถ']]||{sys:r.total_fine,act:r.total_fine,edits:[]};
@@ -2271,6 +2281,7 @@ function buildPenaltyTab(){
       เส้นทาง: r.routes.map(x=>x['ชื่อเส้นทาง']).join(' | '),
       สรุปค่าปรับ_ตามระบบ:s.sys, สรุปค่าปรับ_ปรับจริง:s.act, ผลต่าง:s.act-s.sys, จำนวนรายการที่ปรับปรุง:s.edits.length,
       ผู้ปรับปรุงล่าสุด:last?last.o.editor:'', วันที่ปรับปรุงล่าสุด:last?last.o.ts:'', เหตุผลล่าสุด:last?last.o.reason:'',
+      ค่าปรับใหม่หลังปรับปรุง:r.total_fine, ผู้ขอ:fineReqByPlate(r['ทะเบียนรถ']).req, วันที่ขอ:fineReqByPlate(r['ทะเบียนรถ']).date,
       เหตุผลทั้งหมด:s.edits.map(e=>`${e.leg['เลขที่ใบรายการ']}: ${e.o.original}→${e.o.amount} (${e.o.reason||'-'} · ${e.o.editor} · ${e.o.ts})`).join(' | ')
     }; });
     exportToXLSX(rows,'penalty_summary.xlsx','Penalty');
@@ -2383,11 +2394,11 @@ function openPenaltyDetailModal(tier){
     <div class="toolbar">
       <div class="left"><input id="penaltyDetailSearch" placeholder="ค้นหาทะเบียน/เส้นทาง..." style="width:240px;"></div>
       <button class="expandBtn" onclick="openTableFullscreen('penaltyDetailTable','รายละเอียดค่าปรับ')">ขยายตาราง</button>
-      <button class="exportBtn" onclick="exportToXLSX(window.__curPenaltyDetailRows||[], 'penalty_detail.xlsx','PenaltyDetail')">Export Excel</button>
+      <button class="exportBtn" onclick="exportToXLSX(fineExportRows(window.__curPenaltyDetailRows||[]), 'penalty_detail.xlsx','PenaltyDetail')">Export Excel</button>
     </div>
     <div class="table-scroll" style="max-height:420px;">
       <table class="dashed" id="penaltyDetailTable">
-        <thead><tr><th>ลำดับ</th><th data-key="ทะเบียนรถ">ทะเบียนรถ</th><th data-key="ชนิดรถ">ชนิดรถ</th><th data-key="ชื่อเส้นทาง">ชื่อเส้นทาง</th><th data-key="วันที่">วันที่</th><th data-key="result_gps">ผล(GPS)</th><th data-key="delay_min">ล่าช้า(นาที)</th><th data-key="fine">ค่าปรับ(บาท)</th></tr></thead>
+        <thead><tr><th>ลำดับ</th><th data-key="ทะเบียนรถ">ทะเบียนรถ</th><th data-key="ชนิดรถ">ชนิดรถ</th><th data-key="ชื่อเส้นทาง">ชื่อเส้นทาง</th><th data-key="วันที่">วันที่</th><th data-key="result_gps">ผล(GPS)</th><th data-key="delay_min">ล่าช้า(นาที)</th><th data-key="fine">ค่าปรับใหม่หลังปรับปรุง(บาท)</th><th>ผู้ขอ</th><th>วันที่ขอ</th></tr></thead>
         <tbody></tbody><tfoot></tfoot>
       </table>
     </div>
@@ -2404,9 +2415,9 @@ function openPenaltyDetailModal(tier){
       <td>${r.veh_group==='CC'?'<span class="tag cc">CC</span>':'<span class="tag ab">AB</span>'} ${r['ชนิดรถ']||'-'}</td>
       <td>${r['ชื่อเส้นทาง']||'-'}</td><td>${r['วันที่']||'-'}</td>
       <td><span class="tag delay">${r.result_gps}</span></td><td>${fmt(r.delay_min)}</td>
-      <td><b style="color:var(--delay)">${fmt(effectiveFine(r))}</b></td></tr>`,
+      <td><b style="color:var(--delay)">${fmt(effectiveFine(r))}</b></td><td>${fineEsc(r.fine_req)||'-'}</td><td>${fineEsc(r.fine_reqdate)||'-'}</td></tr>`,
       'fine',
-      a2=>{ const t=a2.reduce((a,b)=>a+effectiveFine(b),0); return `<tr><td colspan="7">รวม ${fmt(a2.length)} ครั้ง</td><td><b>${fmt(t)}</b></td></tr>`; });
+      a2=>{ const t=a2.reduce((a,b)=>a+effectiveFine(b),0); return `<tr><td colspan="7">รวม ${fmt(a2.length)} ครั้ง</td><td><b>${fmt(t)}</b></td><td>-</td><td>-</td></tr>`; });
   }
   document.getElementById('penaltyDetailSearch').addEventListener('input', draw);
   draw();
@@ -2426,7 +2437,7 @@ function renderPenaltyTab(){
   if(state.tab!=='penalty' && !document.getElementById('penaltyTable')) return;
   if(!document.getElementById('penaltyTable')) return;
   renderFineProcessingKPI();
-  renderFineAudit();
+  renderFineAudit(); renderFineWaiver();
   const rows = filteredPenalty();
   const totFine = rows.reduce((a,b)=>a+b.total_fine,0);
   const totCount = rows.reduce((a,b)=>a+b.count,0);
@@ -2447,11 +2458,12 @@ function renderPenaltyTab(){
     <td>${fmt(r.count)}</td><td>${fmt1(r.avg_delay_min)}</td><td><b style="color:var(--delay)">${fmt(r.total_fine)}</b></td>
     <td style="font-size:11px; color:var(--muted)">${(r.routes||[]).map(x=>`${x['ชื่อเส้นทาง']} (${x['ภาคต้นทาง']}→${x['ภาคปลายทาง']})`).join('<br>')}</td>
     <td style="min-width:260px; white-space:normal;">${fineSummaryCell(r['ทะเบียนรถ'], fsm[r['ทะเบียนรถ']])}</td>
+    <td><b style="color:var(--delay)">${fmt(r.total_fine)}</b></td><td>${fineEsc(fineReqByPlate(r['ทะเบียนรถ']).req)}</td><td>${fineEsc(fineReqByPlate(r['ทะเบียนรถ']).date)}</td>
     </tr>`,
     'total_fine',
     arr=>{
       const tF=arr.reduce((a,b)=>a+b.total_fine,0), tC=arr.reduce((a,b)=>a+b.count,0);
-      return `<tr><td colspan="3">รวม ${arr.length} ทะเบียน</td><td>${fmt(tC)}</td><td>-</td><td>${fmt(tF)}</td><td>-</td><td>ตามระบบ ${fmt(arr.reduce((a,b)=>a+((fsm[b['ทะเบียนรถ']]||{}).sys||0),0))} · <b>ปรับจริง ${fmt(tF)}</b></td></tr>`;
+      return `<tr><td colspan="3">รวม ${arr.length} ทะเบียน</td><td>${fmt(tC)}</td><td>-</td><td>${fmt(tF)}</td><td>-</td><td>ตามระบบ ${fmt(arr.reduce((a,b)=>a+((fsm[b['ทะเบียนรถ']]||{}).sys||0),0))} · <b>ปรับจริง ${fmt(tF)}</b></td><td><b>${fmt(tF)}</b></td><td>-</td><td>-</td></tr>`;
     });
 }
 
@@ -2601,7 +2613,7 @@ function openVehicleDetail(plate){
     ${pen? `<div class="insight-box"><b>ค่าปรับ:</b> โดนปรับรวม ${pen.count} ครั้ง เป็นเงิน ${fmt(pen.total_fine)} บาท</div>`:''}
     <div class="roadline small"></div>
     <h4 style="margin-bottom:6px;">📋 ทุกเที่ยวที่วิ่ง — ทะเบียน ${v['ทะเบียนรถ']} (${legs.length} เที่ยว)</h4>
-    <div class="toolbar"><div class="left"></div><button class="expandBtn" onclick="openTableFullscreen('vehicleTripsTable','ทุกเที่ยวที่วิ่ง — ${v['ทะเบียนรถ']}')">ขยายตาราง</button><button class="exportBtn" onclick='exportToXLSX(window.__curVehicleLegs||[], "trips_${v["ทะเบียนรถ"].replace(/[^a-zA-Z0-9ก-๙]/g,"_")}.xlsx","VehicleTrips")'>Export Excel</button></div>
+    <div class="toolbar"><div class="left"></div><button class="expandBtn" onclick="openTableFullscreen('vehicleTripsTable','ทุกเที่ยวที่วิ่ง — ${v['ทะเบียนรถ']}')">ขยายตาราง</button><button class="exportBtn" onclick='exportToXLSX(fineExportRows(window.__curVehicleLegs||[]), "trips_${v["ทะเบียนรถ"].replace(/[^a-zA-Z0-9ก-๙]/g,"_")}.xlsx","VehicleTrips")'>Export Excel</button></div>
     <div class="table-scroll" style="max-height:380px;">
       <table class="dashed" id="vehicleTripsTable">
         <thead><tr>
@@ -2609,7 +2621,7 @@ function openVehicleDetail(plate){
           <th data-key="ชื่อเส้นทาง">ชื่อเส้นทาง</th><th>จุดขึ้น → จุดลง</th>
           <th data-key="เวลาออกGPS">เวลาออก(GPS)</th><th data-key="เวลาเข้าGPS">เวลาเข้า(GPS)</th>
           <th data-key="เวลามาตราฐาน">เวลามาตรฐาน</th><th data-key="HT_GPS">HT(GPS)</th>
-          <th data-key="diff_gps">มาตรฐาน−จริง(GPS)</th><th data-key="result_gps">ผล(GPS)</th><th data-key="fine">ค่าปรับ</th>
+          <th data-key="diff_gps">มาตรฐาน−จริง(GPS)</th><th data-key="result_gps">ผล(GPS)</th><th data-key="fine">ค่าปรับใหม่หลังปรับปรุง</th><th>ผู้ขอ</th><th>วันที่ขอ</th>
         </tr></thead>
         <tbody></tbody><tfoot></tfoot>
       </table>
@@ -2627,13 +2639,13 @@ function openVehicleDetail(plate){
       <td class="mono">${r['เวลาออกGPS']||'-'}</td><td class="mono">${r['เวลาเข้าGPS']||'-'}</td>
       <td class="mono">${r['เวลามาตราฐาน']||'-'}</td><td class="mono">${r['HT_GPS']||'-'}</td>
       <td class="mono">${r['diff_gps']||'-'}</td><td><span class="tag ${tagClass}">${r.result_gps}</span></td>
-      <td>${ef?fmt(ef):'-'}${(r.fine_raw>0&&!r.fine)?` <span class="tag nodata" title="ปรับครั้งเดียวต่อวัน — เที่ยวอื่นของวันนี้ถูกปรับแล้ว (ตามเกณฑ์ ${r.fine_raw} บาท)">ไม่ปรับซ้ำ</span>`:''}${edited} ${r.result_gps==='Delay'?`<button class="expandBtn" style="padding:2px 6px; font-size:10px;" onclick="openFineEditModal(${r._id})">✏️</button>`:''}</td></tr>`;
+      <td>${ef?fmt(ef):'-'}${(r.fine_raw>0&&!r.fine&&!FINE_UPLOAD.active)?` <span class="tag nodata" title="ปรับครั้งเดียวต่อวัน — เที่ยวอื่นของวันนี้ถูกปรับแล้ว (ตามเกณฑ์ ${r.fine_raw} บาท)">ไม่ปรับซ้ำ</span>`:''}${edited} ${r.result_gps==='Delay'&&!FINE_UPLOAD.active?`<button class="expandBtn" style="padding:2px 6px; font-size:10px;" onclick="openFineEditModal(${r._id})">✏️</button>`:''}</td><td>${fineEsc(r.fine_req)||'-'}</td><td>${fineEsc(r.fine_reqdate)||'-'}</td></tr>`;
   },
   'วันที่',
   arr=>{
     const on=arr.filter(x=>x.result_gps==='On Time').length, de=arr.filter(x=>x.result_gps==='Delay').length,
           nd=arr.filter(x=>x.result_gps==='No Data').length, totFine=arr.reduce((a,b)=>a+effectiveFine(b),0);
-    return `<tr><td colspan="11">รวม ${arr.length} เที่ยว · On Time ${on} · Delay ${de} · No Data ${nd}</td><td>-</td><td><b>${fmt(totFine)}</b></td></tr>`;
+    return `<tr><td colspan="11">รวม ${arr.length} เที่ยว · On Time ${on} · Delay ${de} · No Data ${nd}</td><td>-</td><td><b>${fmt(totFine)}</b></td><td>-</td><td>-</td></tr>`;
   });
   const on=legs.filter(x=>x.result_gps==='On Time').length, de=legs.filter(x=>x.result_gps==='Delay').length, nd=legs.filter(x=>x.result_gps==='No Data').length;
   const gpsN = on+de;
@@ -2681,6 +2693,7 @@ function closeTableFullscreen(){
 
 /* ---------- fine (penalty) edit modal ---------- */
 function openFineEditModal(legId){
+  if(FINE_UPLOAD.active){ alert('ขณะนี้ค่าปรับยึดตามไฟล์ที่อัปโหลดเท่านั้น จึงแก้ไขรายเที่ยวด้วยมือไม่ได้\nหากต้องการแก้ ให้กด “ล้างไฟล์ขอยกเว้น” หรืออัปโหลดไฟล์ใหม่'); return; }
   const leg = DATA.trip_details.find(l=>l._id===legId);
   if(!leg) return;
   const cur = FINE_OVERRIDES[legId];
@@ -3017,8 +3030,8 @@ function buildSummaryTab(){
   <div class="grid2" style="margin-top:16px;">
     <div class="panel">
       <h3>4 · ทะเบียนค่าปรับสูงสุด 10 อันดับ</h3>
-      <table class="dashed"><thead><tr><th>ลำดับ</th><th>ทะเบียน</th><th>ครั้ง</th><th>ค่าปรับ(บาท)</th></tr></thead>
-      <tbody>${DATA.penalty.slice(0,10).map((r,i)=>`<tr class="clickable" onclick="jumpToVehicle('${r['ทะเบียนรถ']}')"><td>${i+1}</td><td class="mono">${r['ทะเบียนรถ']}</td><td>${r.count}</td><td>${fmt(r.total_fine)}</td></tr>`).join('')}</tbody></table>
+      <table class="dashed"><thead><tr><th>ลำดับ</th><th>ทะเบียน</th><th>ครั้ง</th><th>ค่าปรับใหม่หลังปรับปรุง(บาท)</th><th>ผู้ขอ</th><th>วันที่ขอ</th></tr></thead>
+      <tbody>${DATA.penalty.slice(0,10).map((r,i)=>`<tr class="clickable" onclick="jumpToVehicle('${r['ทะเบียนรถ']}')"><td>${i+1}</td><td class="mono">${r['ทะเบียนรถ']}</td><td>${r.count}</td><td>${fmt(r.total_fine)}</td><td>${fineEsc(fineReqByPlate(r['ทะเบียนรถ']).req)}</td><td>${fineEsc(fineReqByPlate(r['ทะเบียนรถ']).date)}</td></tr>`).join('')}</tbody></table>
     </div>
     <div class="panel">
       <h3>5 · ทะเบียนเที่ยววิ่งสูงสุด 10 อันดับ</h3>
@@ -3211,7 +3224,7 @@ function exportAllSheets(){
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(DATA.route_top20), 'Overview_RouteTop20');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(DATA.daily_trend), 'DailyTrend');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(DATA.vehicle_type_ranking), 'VehicleType');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(DATA.penalty.map(r=>({ทะเบียนรถ:r['ทะเบียนรถ'],ชนิดรถ:r['ชนิดรถ'],...driverCols(r['ทะเบียนรถ']),จำนวนครั้ง:r.count,ค่าปรับรวม:r.total_fine,ล่าช้าเฉลี่ย:r.avg_delay_min}))), 'Penalty');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(DATA.penalty.map(r=>({ทะเบียนรถ:r['ทะเบียนรถ'],ชนิดรถ:r['ชนิดรถ'],...driverCols(r['ทะเบียนรถ']),จำนวนครั้ง:r.count,ค่าปรับใหม่หลังปรับปรุง:r.total_fine,ผู้ขอ:fineReqByPlate(r['ทะเบียนรถ']).req,วันที่ขอ:fineReqByPlate(r['ทะเบียนรถ']).date,ล่าช้าเฉลี่ย:r.avg_delay_min}))), 'Penalty');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(DATA.vehicle_summary.map(r=>({ทะเบียนรถ:r['ทะเบียนรถ'],ชนิดรถ:r['ชนิดรถ'],...driverCols(r['ทะเบียนรถ']),เที่ยววิ่ง:r.unique_trips,OnTime:r.ontime,Delay:r.delay,NoData:r.nodata,PctDelay:r.pct_delay}))), 'VehicleSummary');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(DATA.nodata_list), 'NoData_Detail');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(computeOwnerStats().map(o=>({เจ้าของรถ:o.owner,จำนวนทะเบียน:o.plate_count,เที่ยววิ่งรวม:o.gps_total,OnTime:o.ontime,Delay:o.delay,PctDelay:o.pct_delay,ค่าปรับรวม:o.fine,ล่าช้าเฉลี่ย:o.avg_delay_min}))), 'OwnerPerformance');
@@ -3397,13 +3410,13 @@ function openOwnerDetail(ownerName){
       <div><div class="k">ค่าปรับรวม</div><div class="v" style="color:var(--delay)">${fmt(o.fine)} บาท</div></div>
     </div>
     <h4 style="margin-bottom:6px;">ทะเบียนรถภายใต้เจ้าของรถรายนี้ (คลิกทะเบียนเพื่อดูรายละเอียดเพิ่มเติม)</h4>
-    <table class="dashed"><thead><tr><th>ลำดับ</th><th>ทะเบียน</th><th>ชื่อพขร.</th><th>เที่ยว(GPS)</th><th>Delay</th><th>%Delay</th><th>ค่าปรับ</th></tr></thead>
+    <table class="dashed"><thead><tr><th>ลำดับ</th><th>ทะเบียน</th><th>ชื่อพขร.</th><th>เที่ยว(GPS)</th><th>Delay</th><th>%Delay</th><th>ค่าปรับใหม่หลังปรับปรุง</th><th>ผู้ขอ</th><th>วันที่ขอ</th></tr></thead>
     <tbody>${plateRows.map((r,i)=>{
       const drv = DRIVER_BY_PLATE[r.plate];
       return `<tr class="clickable" onclick="closeAndPush('ownerDetail'); openVehicleDetail('${r.plate}')">
       <td>${i+1}</td><td class="mono">${r.plate}</td><td>${drv?drv['ชื่อพขร']||'-':'-'}</td>
       <td>${r.v?fmt(r.v.gps_total):'-'}</td><td>${r.v?fmt(r.v.delay):'-'}</td>
-      <td>${r.v?'<span class="tag delay">'+r.v.pct_delay+'%</span>':'-'}</td><td>${fmt(r.fine)}</td></tr>`;
+      <td>${r.v?'<span class="tag delay">'+r.v.pct_delay+'%</span>':'-'}</td><td>${fmt(r.fine)}</td><td>${fineEsc(fineReqByPlate(r.plate).req)}</td><td>${fineEsc(fineReqByPlate(r.plate).date)}</td></tr>`;
     }).join('')}</tbody></table>
   `;
   document.getElementById('ownerDetail').classList.add('open');
@@ -3465,8 +3478,8 @@ function getPeriodStats(){
   const cum = legStats(inc), daily = legStats(inc.filter(r=>latest.has(r.opDateStr)));
   return (__periodStats = {ref:LAST_PARSED_LEGS, n:LAST_PARSED_LEGS.length, ex:EXCLUDED_ROUTE_CODES.size, days, latestDays:days.slice(-2), cum, daily});
 }
-function applyPeriodMode(mode){
-  if(mode===PERIOD_MODE || !LAST_PARSED_LEGS) return;
+function applyPeriodMode(mode, force){
+  if((!force && mode===PERIOD_MODE) || !LAST_PARSED_LEGS) return;
   const st = getPeriodStats();
   const keepRE = {source_file:(DATA.route_exclusion||{}).source_file, excluded_routes_detail:(DATA.route_exclusion||{}).excluded_routes_detail};
   let inc = includedLegs(), exc = LAST_PARSED_LEGS.filter(r=>r.routeCode!=null && EXCLUDED_ROUTE_CODES.has(String(r.routeCode)));
@@ -3672,6 +3685,120 @@ function buildCompareTab(){
 }
 if(typeof TAB_REFRESH_FNS!=='undefined') TAB_REFRESH_FNS.compare = ()=>{ if(CMP.done) processCompare(true); };
 buildCompareTab();
+
+/* ===== Upload ไฟล์ขอยกเว้นค่าปรับ: ยึด "ค่าปรับใหม่หลังปรับปรุง" เป็นค่าปรับจริง ===== */
+function fkN(s){ return String(s==null?'':s).trim().replace(/\s+/g,' '); }
+function fineKeyRow(r){ const p=[r.ticket,r.plate,r.opDateStr,r.departGpsStr,r.routeName].map(fkN); return {k:p.join('|'), f:p.slice(0,3).join('|')}; }
+function fineKeyLeg(l){ const p=[l['เลขที่ใบรายการ'],l['ทะเบียนรถ'],l['วันที่'],l['เวลาออกGPS'],l['ชื่อเส้นทาง']].map(fkN); return {k:p.join('|'), f:p.slice(0,3).join('|')}; }
+function fineUpFind(kk){ const U=FINE_UPLOAD; let u=U.map.get(kk.k); if(!u){ const c=U.fmap.get(kk.f); if(c && c.length===1) u=c[0]; } return u; }
+function applyUploadedFines(rows){
+  const U=FINE_UPLOAD; if(!U.active) return;
+  rows.forEach(r=>{
+    r.fine_sys = r.fine;
+    const u = fineUpFind(fineKeyRow(r));
+    if(u){ r.fine=u.newFine; r.fine_req=u.requester; r.fine_reqdate=u.reqDate; r.fine_up=true; U.matched.add(u.idx); }
+    else { r.fine=0; r.fine_req=''; r.fine_reqdate=''; r.fine_up=false; }
+  });
+}
+function fineFmtReqDate(v){
+  if(v==null||v==='') return '';
+  if(v instanceof Date && !isNaN(v)){ const d=new Date(v.getTime()+12*3600e3); let y=d.getFullYear(); if(y<2400) y+=543;
+    return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+y; }
+  const s=String(v).trim(); const m=s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(m){ let y=+m[1]; if(y<2400) y+=543; return m[3]+'/'+m[2]+'/'+y; }
+  return s;
+}
+function parseFineUploadSheet(A){
+  const hdr=(A[0]||[]).map(h=>String(h==null?'':h).trim()), ix=n=>hdr.indexOf(n);
+  const iP=ix('ทะเบียนรถ'), iT=ix('เลขที่ใบรายการ'), iD=ix('วันที่'), iDep=ix('เวลาออกGPS'), iRt=ix('ชื่อเส้นทาง'), iSys=ix('fine'), iNew=ix('ค่าปรับใหม่หลังปรับปรุง'), iReq=ix('ผู้ขอ'), iDl=ix('delay_min');
+  let iRD=ix('วันที่ขอ'); if(iRD<0){ for(let i=hdr.length-1;i>iD;i--){ if(hdr[i]==='วันที่'){ iRD=i; break; } } }
+  const miss=[]; if(iP<0) miss.push('ทะเบียนรถ'); if(iT<0) miss.push('เลขที่ใบรายการ'); if(iD<0) miss.push('วันที่'); if(iNew<0) miss.push('ค่าปรับใหม่หลังปรับปรุง');
+  if(miss.length) throw new Error('ไม่พบคอลัมน์ที่จำเป็น: '+miss.join(', '));
+  const num=v=>{ if(v==null||v==='') return null; const n=Number(String(v).replace(/,/g,'')); return isNaN(n)?null:n; };
+  const rows=[]; let blank=0;
+  A.slice(1).forEach(r=>{
+    if(!r || (r[iP]==null && r[iT]==null)) return;
+    const sys=iSys>=0?num(r[iSys]):null; let nf=num(r[iNew]); if(nf==null){ blank++; nf = sys!=null?sys:0; }
+    rows.push({plate:fkN(r[iP]), ticket:fkN(r[iT]), day:fkN(r[iD]), dep:iDep>=0?fkN(r[iDep]):'', route:iRt>=0?fkN(r[iRt]):'', delay:iDl>=0?num(r[iDl]):null,
+      sysFine:sys!=null?sys:nf, newFine:nf, requester:iReq>=0?fkN(r[iReq]):'', reqDate:iRD>=0?fineFmtReqDate(r[iRD]):''});
+  });
+  if(!rows.length) throw new Error('ไม่พบแถวข้อมูลในไฟล์');
+  return {rows, blank};
+}
+function setFineUpload(obj){
+  const U=FINE_UPLOAD; U.active=true; U.fileName=obj.fileName; U.uploadedAt=obj.uploadedAt; U.rows=obj.rows; U.blank=obj.blank||0;
+  U.map=new Map(); U.fmap=new Map(); U.byPlate={}; U.matched=new Set();
+  U.rows.forEach((u,i)=>{ u.idx=i;
+    const p=[u.ticket,u.plate,u.day,u.dep,u.route]; U.map.set(p.join('|'),u);
+    const f=p.slice(0,3).join('|'); (U.fmap.get(f)||U.fmap.set(f,[]).get(f)).push(u);
+    (U.byPlate[u.plate]||(U.byPlate[u.plate]=[])).push(u); });
+  __periodStats=null; getPeriodStats();   // คำนวณจับคู่ทุกเที่ยวตั้งแต่ต้น
+}
+function clearFineUpload(){
+  if(!FINE_UPLOAD.active) return;
+  if(!confirm('ล้างไฟล์ขอยกเว้นค่าปรับ และกลับไปใช้ค่าปรับตามเกณฑ์ระบบ?')) return;
+  FINE_UPLOAD.active=false; FINE_UPLOAD.rows=[]; FINE_UPLOAD.map=new Map(); FINE_UPLOAD.fmap=new Map(); FINE_UPLOAD.byPlate={}; FINE_UPLOAD.matched=new Set();
+  try{ localStorage.removeItem('htFineUpload_v1'); }catch(e){}
+  __periodStats=null; applyPeriodMode(PERIOD_MODE,true);
+}
+function handleFineUpload(file){
+  if(!file) return;
+  const rd=new FileReader();
+  rd.onload=e=>{ try{
+    const wb=XLSX.read(new Uint8Array(e.target.result),{type:'array',cellDates:true});
+    const A=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,raw:true,defval:null});
+    const p=parseFineUploadSheet(A);
+    const sOld=p.rows.reduce((a,r)=>a+r.sysFine,0), sNew=p.rows.reduce((a,r)=>a+r.newFine,0), nReq=p.rows.filter(r=>r.requester).length;
+    if(!confirm(`นำเข้าไฟล์ "${file.name}"\n• ${fmt(p.rows.length)} แถว · ผู้ขอ ${fmt(nReq)} รายการ\n• ค่าปรับเดิม ${fmt(sOld)} → หลังปรับปรุง ${fmt(sNew)} บาท\n\nระบบจะคำนวณค่าปรับทุกชีทใหม่ โดยยึดจากไฟล์นี้เท่านั้น (เที่ยวที่ไม่อยู่ในไฟล์ = ไม่มีค่าปรับ) ดำเนินการต่อหรือไม่?`)) return;
+    const obj={fileName:file.name, uploadedAt:new Date().toLocaleString('th-TH'), rows:p.rows, blank:p.blank};
+    setFineUpload(obj);
+    try{ localStorage.setItem('htFineUpload_v1', JSON.stringify(obj)); }catch(err){}
+    applyPeriodMode(PERIOD_MODE,true); switchTab('penalty');
+  }catch(err){ alert('นำเข้าไฟล์ไม่สำเร็จ: '+err.message); } };
+  rd.readAsArrayBuffer(file);
+}
+function restoreFineUpload(){
+  try{ const s=localStorage.getItem('htFineUpload_v1'); if(!s) return; setFineUpload(JSON.parse(s)); applyPeriodMode(PERIOD_MODE,true); }catch(e){}
+}
+function fineReqByPlate(plate){
+  const arr=(FINE_UPLOAD.active && FINE_UPLOAD.byPlate[plate])||[];
+  const rq=[...new Set(arr.map(u=>u.requester).filter(Boolean))], dt=[...new Set(arr.filter(u=>u.requester).map(u=>u.reqDate).filter(Boolean))];
+  return {req:rq.join(', ')||'-', date:dt.join(', ')||'-'};
+}
+function fineExportRows(legs){
+  return legs.map(l=>({'ทะเบียนรถ':l['ทะเบียนรถ'],'ชนิดรถ':l['ชนิดรถ'],veh_group:l.veh_group,'เลขที่ใบรายการ':l['เลขที่ใบรายการ'],'วันที่':l['วันที่'],weekday:l.weekday,
+    'ชื่อเส้นทาง':l['ชื่อเส้นทาง'],'จุดขึ้น':l['จุดขึ้น'],'จุดลง':l['จุดลง'],'เวลาออกGPS':l['เวลาออกGPS'],'เวลาเข้าGPS':l['เวลาเข้าGPS'],'เวลามาตราฐาน':l['เวลามาตราฐาน'],
+    HT_GPS:l.HT_GPS,diff_gps:l.diff_gps,result_gps:l.result_gps,delay_min:l.delay_min, fine:FINE_UPLOAD.active?(l.fine_sys||0):(l.fine||0), 'วันที่ปฏิทิน':l['วันที่ปฏิทิน'],
+    'ค่าปรับใหม่หลังปรับปรุง':effectiveFine(l), 'ผู้ขอ':l.fine_req||'', 'วันที่ขอ':l.fine_reqdate||''}));
+}
+function renderFineWaiver(){
+  const el=document.getElementById('fineWaiverPanel'), clr=document.getElementById('fineUploadClear'); if(!el) return;
+  const U=FINE_UPLOAD; if(clr) clr.style.display=U.active?'':'none';
+  if(!U.active){ el.innerHTML='<div class="nodata-note">📥 ยังไม่ได้อัปโหลดไฟล์ขอยกเว้นค่าปรับ — ค่าปรับคำนวณตามเกณฑ์ระบบ · กดปุ่ม “Upload ไฟล์ขอยกเว้นค่าปรับ” เพื่อใช้ค่าปรับใหม่หลังปรับปรุงตามไฟล์</div>'; return; }
+  const sOld=U.rows.reduce((a,r)=>a+r.sysFine,0), sNew=U.rows.reduce((a,r)=>a+r.newFine,0), miss=U.rows.filter(r=>!U.matched.has(r.idx));
+  const adj=U.rows.filter(r=>r.requester||r.newFine!==r.sysFine);
+  const rq={}; U.rows.forEach(r=>{ if(r.requester) rq[r.requester]=(rq[r.requester]||0)+1; });
+  const exRows=a=>a.map(r=>({ทะเบียนรถ:r.plate,เลขที่ใบรายการ:r.ticket,วันที่วิ่ง:r.day,เวลาออกGPS:r.dep,เส้นทาง:r.route,ล่าช้านาที:r.delay,ค่าปรับเดิม:r.sysFine,ค่าปรับใหม่หลังปรับปรุง:r.newFine,ผู้ขอ:r.requester,วันที่ขอ:r.reqDate,การจับคู่:U.matched.has(r.idx)?'พบในระบบ':'ไม่พบ'}));
+  window.__fineWaiverRows=exRows(adj); window.__fineUpAllRows=exRows(U.rows);
+  el.innerHTML=`
+  <div class="panel" style="margin:12px 0; border:1px solid var(--accent);">
+    <h3>📑 รายการขอยกเว้น/ปรับปรุงค่าปรับ (ตามไฟล์ที่อัปโหลด)</h3>
+    <div class="nodata-note">ไฟล์ <b>${fineEsc(U.fileName)}</b> · อัปโหลดเมื่อ ${fineEsc(U.uploadedAt)} · ${fmt(U.rows.length)} แถว · จับคู่กับข้อมูลได้ <b>${fmt(U.rows.length-miss.length)}</b>${miss.length?` · <b style="color:var(--red-strong)">ไม่พบในข้อมูล ${fmt(miss.length)} แถว</b> (ไม่ถูกนำมาคำนวณ)`:''} · ค่าปรับเดิม ${fmt(sOld)} → <b>หลังปรับปรุง ${fmt(sNew)} บาท</b> (<span style="color:var(--green-strong)">ลด ${fmt(sOld-sNew)}</span>)${U.blank?` · ช่องค่าปรับใหม่ว่าง ${fmt(U.blank)} แถว ใช้ค่าเดิม`:''}<br>
+      ผู้ขอ: ${Object.keys(rq).map(k=>fineEsc(k)+' ('+rq[k]+' รายการ)').join(' · ')||'-'} · <b>ค่าปรับทุกชีทยึดตามไฟล์นี้เท่านั้น</b> (เที่ยวที่ไม่อยู่ในไฟล์ไม่มีค่าปรับ)</div>
+    <div class="toolbar"><div class="left"></div>
+      <button class="exportBtn" onclick="exportToXLSX(window.__fineWaiverRows||[],'fine_waiver_requests.xlsx','Waiver')">Export รายการขอยกเว้น</button>
+      <button class="exportBtn" onclick="exportToXLSX(window.__fineUpAllRows||[],'fine_upload_all.xlsx','FineUpload')">Export ทุกแถวตามไฟล์</button></div>
+    <div class="table-scroll" style="max-height:320px;"><table class="dashed"><thead><tr><th>ลำดับ</th><th>ทะเบียน</th><th>ใบรายการ</th><th>วันที่วิ่ง</th><th>เส้นทาง</th><th>ล่าช้า(นาที)</th><th>ค่าปรับเดิม</th><th>ค่าปรับใหม่หลังปรับปรุง</th><th>ผู้ขอ</th><th>วันที่ขอ</th><th>จับคู่</th></tr></thead><tbody>
+    ${adj.map((r,i)=>`<tr><td>${i+1}</td><td class="mono">${fineEsc(r.plate)}</td><td class="mono">${fineEsc(r.ticket)}</td><td>${fineEsc(r.day)}</td><td style="font-size:11px;">${fineEsc(r.route)}</td><td>${fmt(r.delay)}</td><td>${fmt(r.sysFine)}</td><td><b style="color:${r.newFine<r.sysFine?'var(--green-strong)':'var(--ink)'}">${fmt(r.newFine)}</b></td><td>${fineEsc(r.requester)||'-'}</td><td>${fineEsc(r.reqDate)||'-'}</td><td>${U.matched.has(r.idx)?'<span class="tag ontime">พบ</span>':'<span class="tag delay">ไม่พบ</span>'}</td></tr>`).join('')||'<tr><td colspan="11" style="text-align:center; color:var(--muted);">ไม่มีรายการขอยกเว้นในไฟล์</td></tr>'}
+    </tbody></table></div>
+  </div>`;
+}
+function wireFineUpload(){
+  const inp=document.getElementById('fineUploadInput'), clr=document.getElementById('fineUploadClear');
+  if(inp) inp.addEventListener('change',()=>{ handleFineUpload(inp.files[0]); inp.value=''; });
+  if(clr) clr.addEventListener('click',clearFineUpload);
+}
+restoreFineUpload();
 </script>
 </body>
 </html>
