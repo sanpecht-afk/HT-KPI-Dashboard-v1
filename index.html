@@ -980,6 +980,7 @@ function switchTab(id){
   state.tab = id;
   document.querySelectorAll('nav.tabs button').forEach(b=>b.classList.toggle('active', b.dataset.tab===id));
   document.querySelectorAll('section.tab').forEach(s=>s.classList.toggle('active', s.id==='tab-'+id));
+  const _pb = document.getElementById('periodBar'); if(_pb) _pb.style.display = (id==='summary') ? '' : 'none'; // แถบมุมมองสะสม/รายวัน แสดงเฉพาะชีท Overview
   window.scrollTo({top:0, behavior:'instant'});
 }
 
@@ -3498,6 +3499,7 @@ function renderPeriodBar(){
       ${card('cum','ประสิทธิภาพสะสม',`ตั้งแต่ ${f[0]} ถึง ${f[f.length-1]} · ${f.length} วัน`,st.cum,false)}
       ${card('daily','ประสิทธิภาพรายวัน',`ล่าสุด ${ld.length>1?ld[0]+' – '+ld[ld.length-1]:ld[0]} · ${ld.length} วัน (วันล่าสุดย้อนหลัง 1 วัน)`,st.daily,true)}
     </div>`;
+  const _ov = document.getElementById('tab-summary'); el.style.display = (_ov && _ov.classList.contains('active')) ? '' : 'none';
 }
 renderPeriodBar();
 
