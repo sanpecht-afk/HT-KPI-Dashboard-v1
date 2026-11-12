@@ -49,6 +49,29 @@
   --accent-border-hover: rgba(232,148,74,.55);
   --delay-dark:#5D2A25; --modal-backdrop: rgba(10,7,3,.6);
 }
+/* ===== Period bar (สะสม / รายวัน) ===== */
+.period-bar{position:sticky; top:var(--header-h,80px); z-index:20; display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+  padding:10px 24px; background:var(--surface-a92); backdrop-filter:blur(10px); border-bottom:1px solid var(--line);}
+.period-bar:empty{display:none;}
+.pb-label{font-weight:800; font-size:13px; color:var(--ink); display:flex; flex-direction:column; line-height:1.25;}
+.pb-label small{font-weight:500; font-size:11px; color:var(--muted);}
+.pb-cards{display:flex; gap:12px; flex-wrap:wrap; flex:1;}
+.pb-card{flex:1 1 340px; min-width:300px; text-align:left; font:inherit; color:var(--ink); cursor:pointer; background:var(--surface);
+  border:1.5px solid var(--line); border-radius:14px; padding:10px 14px; transition:all .18s ease; box-shadow:var(--shadow);}
+.pb-card:hover{transform:translateY(-1px); border-color:var(--accent);}
+.pb-card.active{border-color:var(--accent); background:linear-gradient(135deg, var(--surface) 0%, var(--wash-blue, rgba(60,120,220,.08)) 100%); box-shadow:0 0 0 3px rgba(226,118,43,.16), var(--shadow);}
+.pb-head{display:flex; justify-content:space-between; align-items:center; gap:8px;}
+.pb-title{font-weight:800; font-size:14px;}
+.pb-live{font-size:10px; font-weight:800; color:#fff; background:var(--accent); border-radius:999px; padding:2px 8px;}
+.pb-range{font-size:11px; color:var(--muted); margin:2px 0 8px;}
+.pb-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:8px;}
+.pb-grid span{display:block; font-size:10px; color:var(--muted); letter-spacing:.02em;}
+.pb-grid b{font-size:18px; font-weight:800; line-height:1.15;}
+.pb-grid b.g{color:var(--green-strong);} .pb-grid b.r{color:var(--red-strong);}
+.pb-d{display:block; font-style:normal; font-size:10px; font-weight:700; color:var(--muted);}
+.pb-d.g{color:var(--green-strong);} .pb-d.r{color:var(--red-strong);}
+.kpi-card{transition:transform .18s ease, box-shadow .18s ease;} .kpi-card.clickable:hover{transform:translateY(-2px); box-shadow:var(--shadow-md);}
+@media (max-width:760px){ .period-bar{padding:8px 12px;} .pb-card{min-width:100%;} .pb-grid b{font-size:16px;} }
 /* Dark theme: พื้นหลังน้ำเงินเข้มไล่โทนไปเทาดำ */
 [data-theme="dark"] body, body[data-theme="dark"]{
   background: linear-gradient(165deg, #0D2347 0%, #0B1A33 30%, #0E1524 60%, #0A0C11 100%) fixed;
@@ -414,6 +437,7 @@ footer.note{max-width:1360px; margin:24px auto 60px; padding:0 24px; color:var(-
     <nav class="tabs" id="tabNav"></nav>
   </aside>
   <div class="content-col">
+    <div id="periodBar" class="period-bar"></div>
     <div class="camera-bar">
       <button id="cameraExportBtn" title="Export สรุปชีทนี้เป็นรูปภาพ JPG">📷 Export ภาพสรุป (JPG)</button>
     </div>
@@ -576,6 +600,85 @@ function effectiveFine(leg){
   const o = FINE_OVERRIDES[leg._id];
   return o ? o.amount : (leg.fine||0);
 }
+
+/* ===== สรุปค่าปรับ (ปรับจริง + ประวัติผู้ปรับปรุง/วันที่/เหตุผล) · เก็บถาวรในเบราว์เซอร์ · Refresh ตรวจยอด ===== */
+function fineEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function fineLegKey(l){ return [l['เลขที่ใบรายการ'],l['ทะเบียนรถ'],l['วันที่'],l['เวลาออกGPS'],l['ชื่อเส้นทาง']].join('|'); }
+function persistFineOverrides(){
+  try{ const m = JSON.parse(localStorage.getItem('htFineOverrides_v2')||'{}');
+    DATA.trip_details.forEach(l=>{ const o=FINE_OVERRIDES[l._id]; if(o) m[fineLegKey(l)]=o; });
+    localStorage.setItem('htFineOverrides_v2', JSON.stringify(m)); }catch(e){}
+}
+function restoreFineOverrides(){
+  FINE_OVERRIDES = {};
+  try{ const m = JSON.parse(localStorage.getItem('htFineOverrides_v2')||'{}');
+    DATA.trip_details.forEach(l=>{ const o=m[fineLegKey(l)]; if(o) FINE_OVERRIDES[l._id]=o; }); }catch(e){}
+}
+function fineSummaryMap(){
+  const m = {};
+  DATA.trip_details.forEach(l=>{
+    const o = FINE_OVERRIDES[l._id], sys = l.fine||0;
+    if(!sys && !o) return;
+    const s = m[l['ทะเบียนรถ']] || (m[l['ทะเบียนรถ']] = {sys:0, act:0, edits:[]});
+    s.sys += sys; s.act += effectiveFine(l);
+    if(o) s.edits.push({leg:l, o});
+  });
+  return m;
+}
+function fineSummaryCell(plate, s){
+  s = s || {sys:0, act:0, edits:[]};
+  const d = s.act - s.sys;
+  let h = `<div><b>ปรับจริง ${fmt(s.act)}</b> บาท <span style="color:var(--muted)">· ตามระบบ ${fmt(s.sys)}</span>${d?` <span style="color:${d<0?'var(--green-strong)':'var(--red-strong)'}; font-weight:700;">${d>0?'+':''}${fmt(d)}</span>`:''}</div>`;
+  if(!s.edits.length) return h + '<div style="font-size:11px; color:var(--muted);">ไม่มีการปรับปรุง (ตามเกณฑ์ระบบ)</div>';
+  const last = s.edits.slice().sort((a,b)=>(b.o.tsISO||'').localeCompare(a.o.tsISO||''))[0].o;
+  const conf = s.edits.filter(e=>e.o.confirmed).length;
+  h += `<div style="font-size:11px; color:var(--muted);">ปรับปรุง ${s.edits.length} รายการ · ผู้ปรับปรุงล่าสุด <b>${fineEsc(last.editor)}</b> · ${fineEsc(last.ts)}</div>`;
+  h += `<div style="font-size:11px;">เหตุผล: ${fineEsc((last.reason||'-').slice(0,70))}${(last.reason||'').length>70?'…':''}</div>`;
+  h += `<div style="font-size:11px; color:var(--muted);">ยืนยันแล้ว ${conf}/${s.edits.length} · <a href="#" onclick="event.stopPropagation(); openFineAuditModal('${plate}'); return false;" style="color:var(--accent);">ดูประวัติทั้งหมด</a></div>`;
+  return h;
+}
+function fineLogRows(plate){
+  const rows = [];
+  DATA.trip_details.forEach(l=>{
+    const o = FINE_OVERRIDES[l._id]; if(!o) return;
+    if(plate && plate!=='ALL' && l['ทะเบียนรถ']!==plate) return;
+    (o.history && o.history.length ? o.history : [{ts:o.ts, tsISO:o.tsISO, editor:o.editor, from:o.original, to:o.amount, system:o.original, reason:o.reason, confirmed:o.confirmed}]).forEach(h=>{
+      rows.push({ts:h.ts, tsISO:h.tsISO||'', editor:h.editor, plate:l['ทะเบียนรถ'], ticket:l['เลขที่ใบรายการ'], day:l['วันที่'], route:l['ชื่อเส้นทาง'], delay:l.delay_min,
+        system:h.system!=null?h.system:(l.fine||0), from:h.from, to:h.to, reason:h.reason||'', confirmed:!!h.confirmed});
+    });
+  });
+  return rows.sort((a,b)=>b.tsISO.localeCompare(a.tsISO));
+}
+function openFineAuditModal(plate){
+  const rows = fineLogRows(plate);
+  document.getElementById('fineProcessingModalCard').innerHTML = `
+    <button class="closeBtn" onclick="document.getElementById('fineProcessingModal').classList.remove('open')">✕ ปิด</button>
+    <button class="exportBtn" style="float:right; margin-right:8px;" onclick="exportFineLog('${plate}')">Export Excel</button>
+    <h3>🧾 ประวัติการปรับปรุงค่าปรับ ${plate==='ALL'?'(ทุกทะเบียน)':'· '+fineEsc(plate)}</h3>
+    <div class="nodata-note">${fmt(rows.length)} รายการ · เรียงจากล่าสุด · ข้อมูลเก็บในเบราว์เซอร์นี้</div>
+    <div class="table-scroll" style="max-height:480px;"><table class="dashed"><thead><tr><th>วันที่/เวลาที่ปรับปรุง</th><th>ผู้ปรับปรุง</th><th>ทะเบียน</th><th>ใบรายการ</th><th>วันที่วิ่ง</th><th>เส้นทาง</th><th>ล่าช้า(นาที)</th><th>ตามระบบ</th><th>ก่อนแก้</th><th>หลังแก้</th><th>เหตุผล</th><th>สถานะ</th></tr></thead><tbody>
+    ${rows.map(r=>`<tr><td>${fineEsc(r.ts)}</td><td>${fineEsc(r.editor)}</td><td class="mono">${fineEsc(r.plate)}</td><td class="mono">${fineEsc(r.ticket)}</td><td>${fineEsc(r.day)}</td><td style="font-size:11px;">${fineEsc(r.route)}</td><td>${fmt(r.delay)}</td><td>${fmt(r.system)}</td><td>${fmt(r.from)}</td><td><b>${fmt(r.to)}</b></td><td style="min-width:220px; white-space:normal;">${fineEsc(r.reason)||'-'}</td><td>${r.confirmed?'<span class="tag ontime">ยืนยันแล้ว</span>':'<span class="tag nodata">บันทึก</span>'}</td></tr>`).join('') || '<tr><td colspan="12" style="text-align:center; color:var(--muted);">ยังไม่มีการปรับปรุงค่าปรับ</td></tr>'}
+    </tbody></table></div>`;
+  document.getElementById('fineProcessingModal').classList.add('open');
+}
+function exportFineLog(plate){
+  const rows = fineLogRows(plate).map(r=>({วันที่เวลาที่ปรับปรุง:r.ts, ผู้ปรับปรุง:r.editor, ทะเบียนรถ:r.plate, เลขที่ใบรายการ:r.ticket, วันที่วิ่ง:r.day, เส้นทาง:r.route, ล่าช้านาที:r.delay, ค่าปรับตามระบบ:r.system, ก่อนแก้:r.from, หลังแก้:r.to, เหตุผล:r.reason, สถานะ:r.confirmed?'ยืนยันแล้ว':'บันทึก'}));
+  if(!rows.length){ alert('ยังไม่มีประวัติการปรับปรุง'); return; }
+  exportToXLSX(rows,'fine_adjustment_log.xlsx','FineLog');
+}
+function refreshFineData(){
+  const legs = DATA.trip_details, best = {}; let changed = 0;
+  legs.forEach(l=>{ l.fine_raw = l.result_gps==='Delay' ? fineOfJS(l.delay_min) : 0;
+    if(l.fine_raw>0){ const k = normPlateJS(l['ทะเบียนรถ'])+'|'+l['วันที่']; if(!best[k] || l.fine_raw>best[k].fine_raw) best[k]=l; } });
+  legs.forEach(l=>{ const k = normPlateJS(l['ทะเบียนรถ'])+'|'+l['วันที่']; const nf = (l.fine_raw>0 && best[k]===l) ? l.fine_raw : 0; if(nf!==(l.fine||0)) changed++; l.fine = nf; });
+  const sys = legs.reduce((s,l)=>s+(l.fine||0),0), act = legs.reduce((s,l)=>s+effectiveFine(l),0);
+  window.__fineRefresh = {ts:new Date().toLocaleString('th-TH'), changed, sys, act, adj:Object.keys(FINE_OVERRIDES).length};
+}
+function fineRefreshStampHtml(){
+  const r = window.__fineRefresh; if(!r) return 'ยังไม่ได้ Refresh ตรวจยอด';
+  return `ตรวจยอดล่าสุด ${fineEsc(r.ts)} · ตามเกณฑ์ระบบ ${fmt(r.sys)} · ปรับจริง ${fmt(r.act)} บาท · ปรับปรุง ${fmt(r.adj)} รายการ · ${r.changed? `<b style="color:var(--red-strong)">คำนวณใหม่ แก้ ${fmt(r.changed)} เที่ยว</b>` : '<b style="color:var(--green-strong)">ยอดตรงกับเกณฑ์ ✓</b>'}`;
+}
+restoreFineOverrides();
 function computeEffectivePenalty(){
   const map = {};
   DATA.trip_details.forEach(leg=>{
@@ -1302,7 +1405,7 @@ function buildAggregatesFromLegs(ROWS, rawRowCount, fileName, excludedRows){
     vehicle_type_ranking, penalty, penalty_summary, daily_fine, vehicle_summary, trip_details, nodata_list, nodata_summary };
 }
 
-function applyNewTripData(newData, fileName){
+function applyNewTripData(newData, fileName, opts){
   // keep driver master data (separate file); rebuild the plate-keyed lookup against the NEW vehicle list
   const driverMapKeep = DATA.driver_map || {};
   const driver_by_trip_plate = {};
@@ -1316,14 +1419,16 @@ function applyNewTripData(newData, fileName){
   Object.keys(DATA).forEach(k=>{ delete DATA[k]; });
   Object.assign(DATA, newData);
   DRIVER_BY_PLATE = DATA.driver_by_trip_plate;
-  FINE_OVERRIDES = {};
+  restoreFineOverrides();
 
   Object.keys(charts).forEach(k=>{ if(charts[k]) charts[k].destroy(); });
   charts = {};
   document.getElementById('mainArea').innerHTML = '';
   recomputeWeeklyGlobals();
   buildOverviewTab(); buildTrendTab(); buildVehTypeTab(); buildPenaltyTab(); buildVehicleTab(); buildSummaryTab(); buildOwnerTab();
-  switchTab('summary');
+  if(!(opts&&opts.keepMode)) PERIOD_MODE='cum';
+  switchTab(opts&&opts.keepTab ? state.tab : 'summary');
+  renderPeriodBar();
 
   document.getElementById('reportMeta').textContent =
     `Report ${DATA.meta.report_no} · ${DATA.meta.date_from} – ${DATA.meta.date_to} · ${DATA.meta.unique_vehicles} ทะเบียน · ${DATA.meta.unique_tickets} เที่ยวขนส่ง(ใบรายการ)`;
@@ -1334,7 +1439,7 @@ function applyNewTripData(newData, fileName){
   document.getElementById('dayDefNote').textContent = DATA.meta.day_definition;
 
   const exclNote = DATA.meta.total_rows_route_excluded ? `\n• ตัดออกตามรายการเส้นทางยกเว้น: ${fmt(DATA.meta.total_rows_route_excluded)} แถว (${DATA.route_exclusion?DATA.route_exclusion.excluded_codes.length:0} รหัสเส้นทาง)` : '';
-  alert(`✅ อัพโหลดไฟล์ "${fileName}" สำเร็จ!\n\nประมวลผลข้อมูลใหม่ทั้งหมดเรียบร้อยแล้ว:\n• ${fmt(DATA.meta.total_rows_dedup)} แถว (ทะเบียน ${fmt(DATA.meta.unique_vehicles)} คัน · เที่ยวขนส่ง ${fmt(DATA.meta.unique_tickets)} ใบรายการ)${exclNote}\n• ช่วงวันที่: ${DATA.meta.date_from} – ${DATA.meta.date_to}\n\nข้อมูลในทุกชีท (Overview, ภาพรวม AB/CC, แนวโน้มรายวัน, ประเภทรถ, ค่าปรับ, สรุปรายทะเบียน, ประสิทธิภาพเจ้าของรถ) อัพเดทตามไฟล์ใหม่แล้ว`);
+  if(!(opts&&opts.silent)) alert(`✅ อัพโหลดไฟล์ "${fileName}" สำเร็จ!\n\nประมวลผลข้อมูลใหม่ทั้งหมดเรียบร้อยแล้ว:\n• ${fmt(DATA.meta.total_rows_dedup)} แถว (ทะเบียน ${fmt(DATA.meta.unique_vehicles)} คัน · เที่ยวขนส่ง ${fmt(DATA.meta.unique_tickets)} ใบรายการ)${exclNote}\n• ช่วงวันที่: ${DATA.meta.date_from} – ${DATA.meta.date_to}\n\nข้อมูลในทุกชีท (Overview, ภาพรวม AB/CC, แนวโน้มรายวัน, ประเภทรถ, ค่าปรับ, สรุปรายทะเบียน, ประสิทธิภาพเจ้าของรถ) อัพเดทตามไฟล์ใหม่แล้ว`);
 }
 
 document.getElementById('uploadTripInput').addEventListener('change', function(e){
@@ -2070,8 +2175,10 @@ function buildPenaltyTab(){
       ถึง
       <select id="penaltyDateTo">${opDays.map((d,i)=>`<option value="${d.date}" ${i===opDays.length-1?'selected':''}>${d.label}</option>`).join('')}</select>
       <button class="refreshBtn" id="penaltyRefreshBtn">🔄 Refresh</button>
+      <button class="expandBtn" onclick="openFineAuditModal('ALL')">🧾 ประวัติการปรับปรุงทั้งหมด</button>
     </div>
   </div>
+  <div class="nodata-note" id="fineRefreshStamp"></div>
 
   <div class="toolbar">
     <div class="left">
@@ -2082,7 +2189,7 @@ function buildPenaltyTab(){
   </div>
   <div class="table-scroll">
     <table class="dashed" id="penaltyTable">
-      <thead><tr><th>ลำดับ</th><th data-key="ทะเบียนรถ">ทะเบียนรถ</th><th data-key="ชนิดรถ">ชนิดรถ</th><th data-key="count">จำนวนครั้ง</th><th data-key="avg_delay_min">ล่าช้าเฉลี่ย(นาที)</th><th data-key="total_fine">ค่าปรับรวม(บาท)</th><th>เส้นทาง / ภาคต้นทาง→ปลายทาง</th></tr></thead>
+      <thead><tr><th>ลำดับ</th><th data-key="ทะเบียนรถ">ทะเบียนรถ</th><th data-key="ชนิดรถ">ชนิดรถ</th><th data-key="count">จำนวนครั้ง</th><th data-key="avg_delay_min">ล่าช้าเฉลี่ย(นาที)</th><th data-key="total_fine">ค่าปรับรวม(บาท)</th><th>เส้นทาง / ภาคต้นทาง→ปลายทาง</th><th>สรุปค่าปรับ<br><span style="font-weight:400; font-size:11px;">ปรับจริง · ผู้ปรับปรุง · วันที่ · เหตุผล</span></th></tr></thead>
       <tbody></tbody><tfoot></tfoot>
     </table>
   </div>
@@ -2095,17 +2202,23 @@ function buildPenaltyTab(){
   document.getElementById('mainArea').appendChild(sec);
   renderFineAudit();
   document.getElementById('exportPenaltyBtn').addEventListener('click', ()=>{
-    const rows = filteredPenalty().map(r=>({
+    const fsm = fineSummaryMap();
+    const rows = filteredPenalty().map(r=>{ const s = fsm[r['ทะเบียนรถ']]||{sys:r.total_fine,act:r.total_fine,edits:[]};
+      const last = s.edits.slice().sort((a,b)=>(b.o.tsISO||'').localeCompare(a.o.tsISO||''))[0];
+      return {
       ทะเบียนรถ:r['ทะเบียนรถ'], ชนิดรถ:r['ชนิดรถ'], ...driverCols(r['ทะเบียนรถ']), จำนวนครั้ง:r.count, ล่าช้าเฉลี่ยนาที:r.avg_delay_min, ค่าปรับรวมบาท:r.total_fine,
-      เส้นทาง: r.routes.map(x=>x['ชื่อเส้นทาง']).join(' | ')
-    }));
+      เส้นทาง: r.routes.map(x=>x['ชื่อเส้นทาง']).join(' | '),
+      สรุปค่าปรับ_ตามระบบ:s.sys, สรุปค่าปรับ_ปรับจริง:s.act, ผลต่าง:s.act-s.sys, จำนวนรายการที่ปรับปรุง:s.edits.length,
+      ผู้ปรับปรุงล่าสุด:last?last.o.editor:'', วันที่ปรับปรุงล่าสุด:last?last.o.ts:'', เหตุผลล่าสุด:last?last.o.reason:'',
+      เหตุผลทั้งหมด:s.edits.map(e=>`${e.leg['เลขที่ใบรายการ']}: ${e.o.original}→${e.o.amount} (${e.o.reason||'-'} · ${e.o.editor} · ${e.o.ts})`).join(' | ')
+    }; });
     exportToXLSX(rows,'penalty_summary.xlsx','Penalty');
   });
   document.getElementById('penaltySearch').addEventListener('input', renderPenaltyTab);
   document.getElementById('fineTierSlicer').addEventListener('change', renderPenaltyTab);
   document.getElementById('penaltyDateFrom').addEventListener('change', ()=>{ renderPenaltyTab(); drawPenaltyTrendChart(); });
   document.getElementById('penaltyDateTo').addEventListener('change', ()=>{ renderPenaltyTab(); drawPenaltyTrendChart(); });
-  document.getElementById('penaltyRefreshBtn').addEventListener('click', ()=>{ renderPenaltyTab(); drawPenaltyTrendChart(); });
+  document.getElementById('penaltyRefreshBtn').addEventListener('click', ()=>{ refreshFineData(); renderPenaltyTab(); drawPenaltyTrendChart(); });
   renderPenaltyTab();
   drawPenaltyTrendChart();
 
@@ -2257,6 +2370,8 @@ function renderPenaltyTab(){
   const totFine = rows.reduce((a,b)=>a+b.total_fine,0);
   const totCount = rows.reduce((a,b)=>a+b.count,0);
   const effSummary = computeEffectivePenaltySummary();
+  const fsm = fineSummaryMap();
+  const stamp = document.getElementById('fineRefreshStamp'); if(stamp) stamp.innerHTML = fineRefreshStampHtml();
   document.getElementById('penaltyKPI').innerHTML = `
     <div class="kpi-card delay clickable" onclick="openPenaltyDetailModal('ALL')" title="คลิกดูรายละเอียดทุกเที่ยวที่โดนปรับ"><div class="eyebrow">ค่าปรับรวม (ตามตัวกรอง) 🔍</div><div class="value num">${fmt(totFine)}</div><div class="sub">บาท · คลิกดูรายละเอียด</div></div>
     <div class="kpi-card delay clickable" onclick="openPenaltyDetailModal('ALL')" title="คลิกดูรายละเอียดทะเบียนที่โดนปรับ"><div class="eyebrow">ทะเบียนที่โดนปรับ 🔍</div><div class="value num">${fmt(rows.length)}</div><div class="sub">คัน · คลิกดูรายละเอียด</div></div>
@@ -2270,11 +2385,12 @@ function renderPenaltyTab(){
     <td>${r.veh_group==='CC'?'<span class="tag cc">CC</span>':'<span class="tag ab">AB</span>'} ${r['ชนิดรถ']}</td>
     <td>${fmt(r.count)}</td><td>${fmt1(r.avg_delay_min)}</td><td><b style="color:var(--delay)">${fmt(r.total_fine)}</b></td>
     <td style="font-size:11px; color:var(--muted)">${(r.routes||[]).map(x=>`${x['ชื่อเส้นทาง']} (${x['ภาคต้นทาง']}→${x['ภาคปลายทาง']})`).join('<br>')}</td>
+    <td style="min-width:260px; white-space:normal;">${fineSummaryCell(r['ทะเบียนรถ'], fsm[r['ทะเบียนรถ']])}</td>
     </tr>`,
     'total_fine',
     arr=>{
       const tF=arr.reduce((a,b)=>a+b.total_fine,0), tC=arr.reduce((a,b)=>a+b.count,0);
-      return `<tr><td colspan="3">รวม ${arr.length} ทะเบียน</td><td>${fmt(tC)}</td><td>-</td><td>${fmt(tF)}</td><td>-</td></tr>`;
+      return `<tr><td colspan="3">รวม ${arr.length} ทะเบียน</td><td>${fmt(tC)}</td><td>-</td><td>${fmt(tF)}</td><td>-</td><td>ตามระบบ ${fmt(arr.reduce((a,b)=>a+((fsm[b['ทะเบียนรถ']]||{}).sys||0),0))} · <b>ปรับจริง ${fmt(tF)}</b></td></tr>`;
     });
 }
 
@@ -2516,7 +2632,7 @@ function openFineEditModal(legId){
     ${isConfirmed ? `<div class="driver-note">✅ <b>ดำเนินการปรับแล้ว</b> — บันทึกโดย ${cur.confirmedBy} เมื่อ ${cur.confirmedAt}</div>` : ''}
     <label>จำนวนเงินค่าปรับ (บาท)</label>
     <input type="number" id="fineEditAmount" value="${curAmount}" min="0" step="1">
-    <label>เหตุผลในการแก้ไข <span style="font-weight:400; color:var(--muted);">(ระบุถ้ามีการเปลี่ยนแปลงยอด)</span></label>
+    <label>เหตุผลในการแก้ไข <span style="font-weight:400; color:var(--muted);">(จำเป็นต้องระบุเมื่อยอดต่างจากค่าปรับตามระบบ — ใช้ตรวจสอบย้อนหลัง)</span></label>
     <textarea id="fineEditReason" placeholder="เช่น รถเสียกลางทาง มีเอกสารรับรอง...">${cur?cur.reason||'':''}</textarea>
     <label>ชื่อผู้บันทึกรายการ</label>
     <input type="text" id="fineEditor" value="${cur?cur.editor||'':''}" placeholder="ชื่อ-นามสกุลผู้บันทึก">
@@ -2539,12 +2655,17 @@ function saveFineEdit(legId){
   if(!editor){ alert('กรุณาระบุชื่อผู้บันทึกรายการ'); return; }
   const leg = DATA.trip_details.find(l=>l._id===legId);
   const prev = FINE_OVERRIDES[legId];
+  const sysFine = leg.fine||0, before = prev ? prev.amount : sysFine;
+  if(amount!==sysFine && !reason){ alert('กรุณาระบุเหตุผลในการปรับปรุงค่าปรับ (ยอดต่างจากค่าปรับตามระบบ) เพื่อใช้ตรวจสอบย้อนหลัง'); return; }
+  const now = new Date(), hist = (prev && prev.history) ? prev.history.slice() : [];
+  hist.push({ts:now.toLocaleString('th-TH'), tsISO:now.toISOString(), editor, from:before, to:amount, system:sysFine, reason, confirmed:confirmChecked});
   FINE_OVERRIDES[legId] = {
-    amount, reason, editor, ts: new Date().toLocaleString('th-TH'), original: leg.fine||0,
+    amount, reason, editor, ts: now.toLocaleString('th-TH'), tsISO: now.toISOString(), original: sysFine, history: hist,
     confirmed: confirmChecked,
     confirmedBy: confirmChecked ? editor : null,
     confirmedAt: confirmChecked ? (prev && prev.confirmed ? prev.confirmedAt : new Date().toLocaleString('th-TH')) : null,
   };
+  persistFineOverrides();
   document.getElementById('fineEditModal').classList.remove('open');
   alert(confirmChecked ? '✅ บันทึกและยืนยันค่าปรับสำเร็จ — สถานะเปลี่ยนเป็น "ดำเนินการปรับแล้ว"' : '✅ บันทึกการแก้ไขค่าปรับสำเร็จ — ระบบคำนวณค่าปรับใหม่ทั้งหมดที่เกี่ยวข้องแล้ว');
   // refresh everywhere fine totals / status are shown
@@ -3262,6 +3383,63 @@ switchTab('summary');
   let tm; new MutationObserver(()=>{ clearTimeout(tm); tm=setTimeout(paint,80); }).observe(document.body,{childList:true,subtree:true});
   paint();
 })();
+
+/* ===== มุมมองการวิเคราะห์: ประสิทธิภาพสะสม / ประสิทธิภาพรายวัน (ใช้กับทุกหัวข้อ) ===== */
+let PERIOD_MODE = 'cum';   // 'cum' = สะสมทั้งช่วงข้อมูล · 'daily' = วันล่าสุดและย้อนหลัง 1 วัน
+let __periodStats = null;
+function includedLegs(){ return LAST_PARSED_LEGS.filter(r=>!(r.routeCode!=null && EXCLUDED_ROUTE_CODES.has(String(r.routeCode)))); }
+function legStats(rows){
+  applyOncePerDayFine(rows);
+  let o=0,d=0,n=0,f=0;
+  rows.forEach(r=>{ if(r.result_cat==='On Time') o++; else if(r.result_cat==='Delay') d++; else n++; f+=r.fine||0; });
+  const g=o+d;
+  return {total:rows.length, ontime:o, delay:d, nodata:n, pctOn:g?o/g*100:0, pctDelay:g?d/g*100:0, fine:f};
+}
+function getPeriodStats(){
+  const ps=__periodStats;
+  if(ps && ps.ref===LAST_PARSED_LEGS && ps.n===LAST_PARSED_LEGS.length && ps.ex===EXCLUDED_ROUTE_CODES.size) return ps;
+  const inc = includedLegs();
+  const days = Array.from(new Set(inc.map(r=>r.opDateStr).filter(Boolean))).sort((a,b)=>parseThaiDMY(a).localeCompare(parseThaiDMY(b)));
+  const latest = new Set(days.slice(-2));
+  const cum = legStats(inc), daily = legStats(inc.filter(r=>latest.has(r.opDateStr)));
+  return (__periodStats = {ref:LAST_PARSED_LEGS, n:LAST_PARSED_LEGS.length, ex:EXCLUDED_ROUTE_CODES.size, days, latestDays:days.slice(-2), cum, daily});
+}
+function applyPeriodMode(mode){
+  if(mode===PERIOD_MODE || !LAST_PARSED_LEGS) return;
+  const st = getPeriodStats();
+  const keepRE = {source_file:(DATA.route_exclusion||{}).source_file, excluded_routes_detail:(DATA.route_exclusion||{}).excluded_routes_detail};
+  let inc = includedLegs(), exc = LAST_PARSED_LEGS.filter(r=>r.routeCode!=null && EXCLUDED_ROUTE_CODES.has(String(r.routeCode)));
+  if(mode==='daily'){ const ds=new Set(st.latestDays); inc=inc.filter(r=>ds.has(r.opDateStr)); exc=exc.filter(r=>ds.has(r.opDateStr)); }
+  const nd = buildAggregatesFromLegs(inc, LAST_PARSED_META.rawRowCount, LAST_PARSED_META.fileName, exc);
+  if(nd.route_exclusion){ nd.route_exclusion.source_file=keepRE.source_file; nd.route_exclusion.excluded_routes_detail=keepRE.excluded_routes_detail; }
+  PERIOD_MODE = mode;
+  applyNewTripData(nd, LAST_PARSED_META.fileName, {silent:true, keepTab:true, keepMode:true});
+}
+function renderPeriodBar(){
+  const el = document.getElementById('periodBar'); if(!el || !LAST_PARSED_LEGS) return;
+  const st = getPeriodStats(); if(!st.days.length){ el.innerHTML=''; return; }
+  const dl = (a,b,upGood)=>{ const x=a-b; if(Math.abs(x)<0.05) return '<i class="pb-d">• เท่ากับสะสม</i>';
+    const good = upGood ? x>0 : x<0; return `<i class="pb-d ${good?'g':'r'}">${x>0?'▲':'▼'} ${Math.abs(x).toFixed(1)} จุด เทียบสะสม</i>`; };
+  const card = (mode,title,sub,s,withDelta)=>`
+    <button class="pb-card ${PERIOD_MODE===mode?'active':''}" onclick="applyPeriodMode('${mode}')" aria-pressed="${PERIOD_MODE===mode}">
+      <div class="pb-head"><span class="pb-title">${title}</span>${PERIOD_MODE===mode?'<span class="pb-live">กำลังแสดง</span>':''}</div>
+      <div class="pb-range">${sub}</div>
+      <div class="pb-grid">
+        <div><span>เที่ยววิ่ง</span><b>${fmt(s.total)}</b></div>
+        <div><span>%On Time</span><b class="g">${s.pctOn.toFixed(1)}%</b>${withDelta?dl(s.pctOn,st.cum.pctOn,true):''}</div>
+        <div><span>%Delay</span><b class="r">${s.pctDelay.toFixed(1)}%</b>${withDelta?dl(s.pctDelay,st.cum.pctDelay,false):''}</div>
+        <div><span>ค่าปรับ (บาท)</span><b>${fmt(s.fine)}</b></div>
+      </div>
+    </button>`;
+  const f = st.days, ld = st.latestDays;
+  el.innerHTML = `
+    <div class="pb-label">📊 มุมมองวิเคราะห์<small>เลือกแล้วทุกหัวข้อ (1–7) คำนวณใหม่ตามช่วงนี้</small></div>
+    <div class="pb-cards">
+      ${card('cum','ประสิทธิภาพสะสม',`ตั้งแต่ ${f[0]} ถึง ${f[f.length-1]} · ${f.length} วัน`,st.cum,false)}
+      ${card('daily','ประสิทธิภาพรายวัน',`ล่าสุด ${ld.length>1?ld[0]+' – '+ld[ld.length-1]:ld[0]} · ${ld.length} วัน (วันล่าสุดย้อนหลัง 1 วัน)`,st.daily,true)}
+    </div>`;
+}
+renderPeriodBar();
 </script>
 </body>
 </html>
