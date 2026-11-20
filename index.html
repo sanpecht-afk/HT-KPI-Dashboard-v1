@@ -146,6 +146,17 @@ body header.topbar .controls input::placeholder{color:#5A6B86;}
 .ex-pill{display:inline-block; min-width:48px; padding:4px 14px; border-radius:999px; font-weight:800; font-size:13px;}
 .ex-pill.ab{background:#FFE9B8; color:#B8741A;} .ex-pill.cc{border:1.5px solid var(--accent); color:var(--accent);}
 .ex-link{border:1px solid var(--accent); background:transparent; color:var(--accent); border-radius:999px; padding:5px 12px; font-weight:700; cursor:pointer; margin-left:auto;}
+/* ===== รายสัปดาห์ตามปฏิทิน ===== */
+.wk-cal{margin-top:20px; border:1px solid var(--line);}
+.wk-ctl{display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:14px 0 10px;}
+.wk-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(420px,1fr)); gap:14px;}
+.wk-chart{background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:10px 14px 8px;} .wk-chart h4{margin:2px 0 6px; font-size:14px;}
+.pb-card.wk-ab{border-left:6px solid var(--blue,#1F5FD6);} .pb-card.wk-cc{border-left:6px solid var(--accent);}
+.ex-pill.all{background:#E2E8F0; color:#475569;}
+.wk-tbl td,.wk-tbl th{text-align:center;} .wk-tbl td.g,.wk-tbl th.g{color:var(--green-strong); font-weight:700;} .wk-tbl td.r,.wk-tbl th.r{color:var(--red-strong); font-weight:700;}
+.wk-tbl .wk-wcell{text-align:left; background:var(--surface-2); min-width:150px;} .wk-tbl .wk-r-all td{background:rgba(100,116,139,.08); font-weight:600;}
+.wk-tbl tr.wk-r-ab td:nth-child(2),.wk-tbl tr.wk-r-cc td:nth-child(2){white-space:nowrap;}
+@media (max-width:760px){ .wk-grid{grid-template-columns:1fr;} }
 /* Dark theme: พื้นหลังน้ำเงินเข้มไล่โทนไปเทาดำ */
 [data-theme="dark"] body, body[data-theme="dark"]{
   background: linear-gradient(165deg, #0D2347 0%, #0B1A33 30%, #0E1524 60%, #0A0C11 100%) fixed;
@@ -1950,6 +1961,93 @@ function drawRouteTop20Chart(){
 }
 
 /* ================= TAB 2: TREND ================= */
+
+/* ===== แนวโน้มรายสัปดาห์ตามปฏิทิน (จันทร์–อาทิตย์) แยก AB / CC ===== */
+let WK = {type:'bar', show:{AB:true,CC:true,ALL:false}};
+const WK_METRICS = [
+  {k:'pctOn',   label:'%On Time',                   f:v=>fmt1(v)+'%', better:'up'},
+  {k:'pctDelay',label:'%Delay',                     f:v=>fmt1(v)+'%', better:'down'},
+  {k:'avg',     label:'เวลาเฉลี่ยที่ Delay (นาที)', f:v=>fmt1(v),     better:'down'},
+  {k:'fine',    label:'ค่าปรับ (บาท)',              f:v=>fmt(v),      better:'down'},
+  {k:'total',   label:'เที่ยววิ่งทั้งหมด',          f:v=>fmt(v),      better:null},
+  {k:'pctNd',   label:'%No Data',                   f:v=>fmt1(v)+'%', better:'down'},
+];
+const WK_COL = {AB:()=>cssv('--blue')||'#1F5FD6', CC:()=>cssv('--accent')||'#E2762B', ALL:()=>'#64748B'};
+const WK_NAME = {AB:'AB', CC:'CC', ALL:'รวม AB+CC'};
+function isoWeekNo(iso){ const d=new Date(iso+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()-((d.getUTCDay()+6)%7)+3);
+  const ft=new Date(Date.UTC(d.getUTCFullYear(),0,4)); return 1+Math.round(((d-ft)/864e5-3+((ft.getUTCDay()+6)%7))/7); }
+function wkDM(iso){ return iso.slice(8,10)+'/'+iso.slice(5,7); }
+function weeklyCalData(){
+  const dset=new Set(DATA.daily_trend.map(d=>d.date));
+  const rows=includedLegs().filter(r=>r.opDateStr && dset.has(r.opDateStr));
+  applyOncePerDayFine(rows);
+  const mk=()=>({total:0,on:0,dl:0,nd:0,dsum:0,fine:0}), wk={};
+  rows.forEach(r=>{
+    const iso=r._iso||(r._iso=thaiToISO(r.opDateStr)), dow=new Date(iso+'T00:00:00Z').getUTCDay(), mon=isoAdd(iso,-((dow+6)%7));
+    const w=wk[mon]||(wk[mon]={mon,sun:isoAdd(mon,6),days:new Set(),g:{AB:mk(),CC:mk(),ALL:mk()}});
+    w.days.add(iso);
+    [w.g.ALL,w.g[r.veh_group]].forEach(o=>{ if(!o) return; o.total++; o.fine+=r.fine||0;
+      if(r.result_cat==='On Time') o.on++; else if(r.result_cat==='Delay'){ o.dl++; o.dsum+=r.delay_min||0; } else o.nd++; });
+  });
+  const weeks=Object.values(wk).sort((a,b)=>a.mon.localeCompare(b.mon)).map(w=>{
+    ['AB','CC','ALL'].forEach(k=>{ const o=w.g[k], g=o.on+o.dl; o.gps=g; o.pctOn=g?o.on/g*100:0; o.pctDelay=g?o.dl/g*100:0; o.pctNd=o.total?o.nd/o.total*100:0; o.avg=o.dl?o.dsum/o.dl:0; });
+    w.no=isoWeekNo(w.mon); w.label=`สัปดาห์ที่ ${w.no} (${wkDM(w.mon)}–${wkDM(w.sun)})`; w.partial=w.days.size<7; w.nDays=w.days.size; return w; });
+  return {weeks};
+}
+function wkDelta(cur,prev,better){
+  if(prev==null) return '<i class="pb-d">—</i>';
+  const x=cur-prev; if(Math.abs(x)<0.05) return '<i class="pb-d">• เท่าเดิม</i>';
+  const good=better==='up'?x>0:x<0; return `<i class="pb-d ${good?'g':'r'}">${good?'▲':'▼'} ${x>0?'+':'−'}${fmt1(Math.abs(x))} จุด</i>`;
+}
+function wkDrawCharts(D){
+  const ink=cssv('--ink'), line=cssv('--line'), keys=['AB','CC','ALL'].filter(k=>WK.show[k]);
+  WK_METRICS.forEach(m=>{
+    const id='wkCh_'+m.k, cv=document.getElementById(id); if(!cv) return;
+    if(charts[id]) charts[id].destroy();
+    const sets=keys.map(k=>({label:WK_NAME[k], data:D.weeks.map(w=>+w.g[k][m.k].toFixed(1)), backgroundColor:WK_COL[k](), borderColor:WK_COL[k](), borderRadius:7, maxBarThickness:46,
+      tension:.35, borderWidth:WK.type==='line'?3.5:0, pointRadius:WK.type==='line'?5:0, pointBackgroundColor:'#fff', pointBorderColor:WK_COL[k](), pointBorderWidth:2,
+      datalabels:dl(v=>m.f(v),{anchor:'end',align:WK.type==='line'?'top':'end',color:WK_COL[k](),offset:3})}));
+    const max=Math.max(1,...sets.flatMap(s=>s.data));
+    charts[id]=new Chart(cv,{type:WK.type==='line'?'line':'bar',data:{labels:D.weeks.map(w=>w.label.replace('สัปดาห์ที่ ','ส.')+(w.partial?' *':'')),datasets:sets},
+      options:{animation:false,responsive:true,maintainAspectRatio:false,layout:{padding:{top:26}},plugins:{legend:{labels:{color:ink,usePointStyle:true}}},
+        scales:{x:{ticks:{color:ink,font:{size:11}},grid:{display:false}},y:{beginAtZero:true,max:max*1.25,ticks:{color:ink},grid:{color:line}}}}});
+  });
+}
+function renderWeeklyCalendar(sec){
+  const D=weeklyCalData(), el=document.createElement('div'); el.className='panel wk-cal'; el.id='wkCal'; sec.appendChild(el);
+  const W=D.weeks; if(!W.length){ el.innerHTML='<div class="cmp-empty">ไม่มีข้อมูลสำหรับสรุปรายสัปดาห์</div>'; return; }
+  const last=W[W.length-1], prev=W.length>1?W[W.length-2]:null;
+  const card=g=>{ const c=last.g[g], p=prev?prev.g[g]:null;
+    return `<div class="pb-card ${g==='AB'?'wk-ab':'wk-cc'}" style="cursor:default;"><div class="pb-head"><span class="ex-pill ${g.toLowerCase()}">${g}</span><span class="pb-range" style="margin:0;">${last.label}${last.partial?' · บางส่วน '+last.nDays+' วัน':''}</span></div>
+      <div class="pb-grid" style="margin-top:8px;"><div><span>เที่ยววิ่ง</span><b>${fmt(c.total)}</b></div>
+      <div><span>%On Time</span><b class="g">${fmt1(c.pctOn)}%</b>${wkDelta(c.pctOn,p&&p.pctOn,'up')}</div>
+      <div><span>%Delay</span><b class="r">${fmt1(c.pctDelay)}%</b>${wkDelta(c.pctDelay,p&&p.pctDelay,'down')}</div>
+      <div><span>ค่าปรับ (บาท)</span><b>${fmt(c.fine)}</b></div></div>${prev?'<div class="pb-range" style="margin:6px 0 0;">เทียบ '+prev.label+'</div>':''}</div>`; };
+  /* ตาราง */
+  const body=W.map((w,wi)=>['AB','CC','ALL'].map((k,ki)=>{ const o=w.g[k], p=wi>0?W[wi-1].g[k]:null;
+    return `<tr class="wk-r-${k.toLowerCase()}">${ki===0?`<td rowspan="3" class="wk-wcell"><b>${w.label}</b><br><small>${w.partial?'บางส่วน '+w.nDays+' วัน':'ครบ 7 วัน'}</small></td>`:''}<td><span class="ex-pill ${k.toLowerCase()}">${k==='ALL'?'รวม':k}</span></td>
+      <td>${fmt(o.total)}</td><td>${fmt(o.gps)}</td><td class="g">${fmt(o.on)}</td><td class="r">${fmt(o.dl)}</td><td>${fmt(o.nd)}</td><td class="g">${fmt1(o.pctOn)}%</td><td class="r">${fmt1(o.pctDelay)}%</td><td>${fmt1(o.pctNd)}%</td><td>${fmt1(o.avg)}</td><td>${fmt(o.fine)}</td><td>${wkDelta(o.pctDelay,p&&p.pctDelay,'down')}</td></tr>`; }).join('')).join('');
+  window.__wkRows=W.flatMap(w=>['AB','CC','ALL'].map(k=>{ const o=w.g[k]; return {สัปดาห์:w.label,วันที่มีข้อมูล:w.nDays,กลุ่ม:WK_NAME[k],เที่ยวทั้งหมด:o.total,เที่ยวมีGPS:o.gps,OnTime:o.on,Delay:o.dl,NoData:o.nd,'%OnTime':+o.pctOn.toFixed(1),'%Delay':+o.pctDelay.toFixed(1),'%NoData':+o.pctNd.toFixed(1),ล่าช้าเฉลี่ยนาที:+o.avg.toFixed(1),ค่าปรับบาท:o.fine}; }));
+  /* สรุปอัตโนมัติ */
+  const ins=[]; const dd=(a,b)=>{ const x=a-b; return Math.abs(x)<0.05?'เท่าเดิม':`<b class="${x<0?'good':'bad'}">${x<0?'ดีขึ้น':'แย่ลง'} ${fmt1(Math.abs(x))} จุด</b>`; };
+  ['AB','CC'].forEach(g=>{ const c=last.g[g], p=prev?prev.g[g]:null; ins.push(`<b>${g}</b> ${last.label}: %Delay <b>${fmt1(c.pctDelay)}%</b>${p?` (${dd(c.pctDelay,p.pctDelay)} เทียบสัปดาห์ก่อน)`:''} · %On Time ${fmt1(c.pctOn)}% · ล่าช้าเฉลี่ย ${fmt1(c.avg)} นาที · ค่าปรับ ${fmt(c.fine)} บาท`); });
+  const hiG=last.g.AB.pctDelay>=last.g.CC.pctDelay?'AB':'CC'; ins.push(`สัปดาห์ล่าสุด กลุ่ม <b>${hiG}</b> มี %Delay สูงกว่า (AB ${fmt1(last.g.AB.pctDelay)}% vs CC ${fmt1(last.g.CC.pctDelay)}%) — ควรโฟกัสกลุ่มนี้`);
+  const worst=W.filter(w=>w.g.ALL.gps>0).sort((a,b)=>b.g.ALL.pctDelay-a.g.ALL.pctDelay)[0]; if(worst&&W.length>1) ins.push(`สัปดาห์ที่ %Delay รวมสูงสุดคือ <b>${worst.label}</b> (${fmt1(worst.g.ALL.pctDelay)}%) ค่าปรับ ${fmt(worst.g.ALL.fine)} บาท`);
+  if(W.some(w=>w.partial)) ins.push('<small>* สัปดาห์ที่มีข้อมูลไม่ครบ 7 วัน (ต้น/ท้ายช่วงข้อมูล) จึงไม่ควรนำไปเทียบกับสัปดาห์เต็มโดยตรง</small>');
+  el.innerHTML=`
+    <h3 style="margin:0 0 4px;">📅 สรุปรายสัปดาห์ตามปฏิทิน (จันทร์–อาทิตย์) · แยกผล AB / CC</h3>
+    <div class="nodata-note" style="margin:0 0 10px;">นับตามสัปดาห์ปฏิทินจริง (เริ่มวันจันทร์) · %On Time / %Delay คิดจากเที่ยวที่มี GPS · ค่าปรับเป็นยอดหลังหักตามเงื่อนไขระบบ · สัปดาห์ที่มี * = ข้อมูลไม่ครบ 7 วัน</div>
+    <div class="pb-cards">${card('AB')}${card('CC')}</div>
+    <div class="wk-ctl no-capture"><span class="cmp-lab">ชนิดกราฟ</span><div class="cmp-seg" id="wkType"><button type="button" data-t="bar" class="${WK.type==='bar'?'on':''}">📊 แท่ง</button><button type="button" data-t="line" class="${WK.type==='line'?'on':''}">📈 เส้น</button></div>
+      <span class="cmp-lab" style="margin-left:14px;">แสดงกลุ่ม</span><div class="cmp-seg" id="wkGrp">${['AB','CC','ALL'].map(k=>`<button type="button" data-g="${k}" class="${WK.show[k]?'on':''}">${WK_NAME[k]}</button>`).join('')}</div></div>
+    <div class="wk-grid">${WK_METRICS.map(m=>`<div class="wk-chart"><h4>${m.label}</h4><div style="height:270px;"><canvas id="wkCh_${m.k}"></canvas></div></div>`).join('')}</div>
+    <div class="toolbar"><div class="left"><b>ตารางรายสัปดาห์ แยก AB / CC / รวม</b></div><button class="exportBtn" onclick="exportToXLSX(window.__wkRows||[],'weekly_calendar_AB_CC.xlsx','Weekly')">Export Excel</button></div>
+    <div class="table-scroll"><table class="dashed wk-tbl"><thead><tr><th>สัปดาห์</th><th>กลุ่ม</th><th>เที่ยวทั้งหมด</th><th>เที่ยวมี GPS</th><th class="g">On Time</th><th class="r">Delay</th><th>No Data</th><th class="g">%On Time</th><th class="r">%Delay</th><th>%No Data</th><th>ล่าช้าเฉลี่ย (นาที)</th><th>ค่าปรับ (บาท)</th><th>%Delay เทียบสัปดาห์ก่อน</th></tr></thead><tbody>${body}</tbody></table></div>
+    <div class="insight-box" style="margin-top:12px;"><b>📝 สรุปรายสัปดาห์:</b><ul style="margin:6px 0 0; padding-left:20px; display:grid; gap:5px;">${ins.map(s=>`<li>${s}</li>`).join('')}</ul></div>`;
+  el.querySelectorAll('#wkType button').forEach(b=>b.addEventListener('click',()=>{ WK.type=b.dataset.t; el.querySelectorAll('#wkType button').forEach(x=>x.classList.toggle('on',x===b)); wkDrawCharts(D); }));
+  el.querySelectorAll('#wkGrp button').forEach(b=>b.addEventListener('click',()=>{ const g=b.dataset.g; const n=Object.values(WK.show).filter(Boolean).length; if(WK.show[g]&&n===1) return; WK.show[g]=!WK.show[g]; b.classList.toggle('on',WK.show[g]); wkDrawCharts(D); }));
+  wkDrawCharts(D);
+}
 function buildTrendTab(){
   const sec = document.createElement('section');
   sec.className='tab'; sec.id='tab-trend';
@@ -1985,22 +2083,7 @@ function buildTrendTab(){
   renderTrendTable();
   drawTrendChart();
 
-  renderWeeklyPanel({
-    mountEl: sec, title:'แนวโน้มรายวัน (สรุปเป็นรายสัปดาห์)',
-    weeks: WEEKLY_ALL,
-    metrics:[
-      {key:'total', label:'เที่ยวรวม', higherIsBad:false},
-      {key:'pct_ontime', label:'%On Time', unit:'%', higherIsBad:false},
-      {key:'pct_delay', label:'%Delay', unit:'%', higherIsBad:true},
-      {key:'pct_nodata', label:'%No Data', unit:'%', higherIsBad:true},
-      {key:'avg_delay_min', label:'ล่าช้าเฉลี่ย', unit:' นาที', higherIsBad:true},
-    ],
-    charts:[
-      {key:'pct_ontime', label:'%On Time', color:'--ontime', unit:'%'},
-      {key:'pct_delay', label:'%Delay', color:'--delay', unit:'%'},
-    ],
-    insightHtml: weeklyAutoInsight(WEEKLY_ALL, 'pct_delay', '%Delay รวมทุกประเภทรถ', '%', true),
-  });
+  renderWeeklyCalendar(sec);
 }
 function getDailyTrendForGroup(){
   if(state.group!=='ALL' && DATA.daily_trend_by_group && DATA.daily_trend_by_group[state.group]) return DATA.daily_trend_by_group[state.group];
