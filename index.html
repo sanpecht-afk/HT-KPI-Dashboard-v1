@@ -674,7 +674,7 @@ if(DATA.raw_legs_all && DATA.raw_legs_all.length){
   const driverMapKeep = DATA.driver_map || {};
   const routeExclMetaKeep = { source_file: (DATA.route_exclusion||{}).source_file, excluded_routes_detail: (DATA.route_exclusion||{}).excluded_routes_detail };
   LAST_PARSED_LEGS = DATA.raw_legs_all;
-  const _inc0 = LAST_PARSED_LEGS.filter(r => !(r.routeCode!=null && EXCLUDED_ROUTE_CODES.has(String(r.routeCode))));
+  const _inc0 = LAST_PARSED_LEGS.filter(r => !(isExcludedRow(r)));
   const _old = {delay:_inc0.filter(r=>r.result_cat==='Delay').length, ontime:_inc0.filter(r=>r.result_cat==='On Time').length,
                 fine:_inc0.reduce((a,r)=>a+(r.fine||0),0)};
   applyNewLogicToLegs(LAST_PARSED_LEGS);
@@ -682,8 +682,8 @@ if(DATA.raw_legs_all && DATA.raw_legs_all.length){
   LOGIC_COMPARE = {old:_old, now:{delay:_inc0.filter(r=>r.result_cat==='Delay').length, ontime:_inc0.filter(r=>r.result_cat==='On Time').length,
                 nodata:_inc0.filter(r=>r.result_cat==='No Data').length, fine:_inc0.reduce((a,r)=>a+(r.fine||0),0)}};
   LAST_PARSED_META = {rawRowCount: DATA.meta.total_rows_raw, fileName: DATA.meta.report_no};
-  const included = LAST_PARSED_LEGS.filter(r => !(r.routeCode!=null && EXCLUDED_ROUTE_CODES.has(String(r.routeCode))));
-  const excludedRowsArr = LAST_PARSED_LEGS.filter(r => r.routeCode!=null && EXCLUDED_ROUTE_CODES.has(String(r.routeCode)));
+  const included = LAST_PARSED_LEGS.filter(r => !(isExcludedRow(r)));
+  const excludedRowsArr = LAST_PARSED_LEGS.filter(r => isExcludedRow(r));
   const rebuilt = buildAggregatesFromLegs(included, LAST_PARSED_META.rawRowCount, LAST_PARSED_META.fileName, excludedRowsArr);
   rebuilt.route_exclusion.source_file = routeExclMetaKeep.source_file;
   rebuilt.route_exclusion.excluded_routes_detail = routeExclMetaKeep.excluded_routes_detail;
@@ -824,10 +824,11 @@ Chart.defaults.set('plugins.datalabels', {display:false}); // opt-in per dataset
 /* shared datalabel style builder: "จำนวน (%)" or "%" labels shown directly on every chart */
 function dl(formatterFn, extra){
   return Object.assign({
-    display:true,
+    display:'auto', clamp:true, offset:10,
+    align:c=>(c.chart.config.type==='line'||c.chart.config.type==='radar')?(c.datasetIndex%2?'bottom':'top'):'center',
     color: cssv('--ink'),
     font: {size:14, weight:'700'},
-    formatter: formatterFn,
+    formatter:(v,c)=>{ let s=formatterFn(v,c); if(typeof s==='string' && s.indexOf('\n')>=0 && c.chart.data.labels && c.chart.data.labels.length>8) s=s.split('\n')[0]; return s; },
   }, extra||{});
 }
 function pct1(n){ return Math.round((n||0)*10)/10; }
@@ -1309,8 +1310,8 @@ function processTripWorkbook(workbook, fileName){
   LAST_PARSED_META = {rawRowCount, fileName};
 
   const preExclCount = ROWS.length;
-  const ROWS_INCLUDED = ROWS.filter(r => !(r.routeCode!=null && EXCLUDED_ROUTE_CODES.has(String(r.routeCode))));
-  const ROWS_EXCLUDED = ROWS.filter(r => r.routeCode!=null && EXCLUDED_ROUTE_CODES.has(String(r.routeCode)));
+  const ROWS_INCLUDED = ROWS.filter(r => !(isExcludedRow(r)));
+  const ROWS_EXCLUDED = ROWS.filter(r => isExcludedRow(r));
 
   return buildAggregatesFromLegs(ROWS_INCLUDED, rawRowCount, fileName, ROWS_EXCLUDED);
 }
@@ -1634,8 +1635,8 @@ document.getElementById('uploadRouteExclInput').addEventListener('change', funct
           // rebuild every sheet live with the new exclusion list — this runs whether the
           // currently-loaded data came from the default baked-in dataset or a manually uploaded trip file
           const preExclCount = LAST_PARSED_LEGS.length;
-          const included = LAST_PARSED_LEGS.filter(r => !(r.routeCode!=null && EXCLUDED_ROUTE_CODES.has(String(r.routeCode))));
-          const excludedRowsArr = LAST_PARSED_LEGS.filter(r => r.routeCode!=null && EXCLUDED_ROUTE_CODES.has(String(r.routeCode)));
+          const included = LAST_PARSED_LEGS.filter(r => !(isExcludedRow(r)));
+          const excludedRowsArr = LAST_PARSED_LEGS.filter(r => isExcludedRow(r));
           const routeExcludedCount = excludedRowsArr.length;
           const newData = buildAggregatesFromLegs(included, LAST_PARSED_META.rawRowCount, LAST_PARSED_META.fileName, excludedRowsArr);
           applyNewTripData(newData, LAST_PARSED_META.fileName);
@@ -2027,9 +2028,9 @@ function drawRouteTop20Chart(){
     beforeUpdate:safe(function(chart){
       const t=chart.config.type; if(!['bar','line','pie','doughnut','radar'].includes(t)) return;
       const o=chart.options, L=o.layout||(o.layout={}); let p=L.padding; if(typeof p!=='object'||p==null){ const v=p||0; p={top:v,right:v,bottom:v,left:v}; }
-      const m=tmode(chart), need=m==='pair'?78:(m==='seq'?(t==='bar'?74:44):0);
-      p.top=Math.max(p.top||0,need+(t==='bar'?12:0)+((t==='line'||t==='bar')?8:0));
-      p.right=Math.max(p.right||0,t==='bar'?22:10); p.bottom=Math.max(p.bottom||0,(t==='pie'||t==='doughnut')?20:4); L.padding=p;
+      const m=tmode(chart), nr=m==='seq'?Math.min(4,(chart.data.datasets||[]).length):0;
+      p.top=Math.max(p.top||0,(m==='pair'?78:0)+(t==='bar'?14:0)+((t==='line'||t==='bar')?10:0));
+      p.right=Math.max(p.right||0,t==='bar'?22:10); p.bottom=Math.max(p.bottom||0,(t==='pie'||t==='doughnut')?20:4,nr?nr*27+10:0); L.padding=p;
     }),
     /* ฐาน/ความลึกก่อนวาดชุดข้อมูล */
     beforeDatasetsDraw:safe(function(chart){
@@ -2088,11 +2089,14 @@ function drawRouteTop20Chart(){
           const ta=a.getProps(['x','y','base'],true), tb=b.getProps(['x','y','base'],true), top=Math.min(ta.y,tb.y);
           badge(ctx,(ta.x+tb.x)/2,Math.max(chart.chartArea.top-8,top-58),pc,pol(lb),'full'); });
         return; }
-      ds.forEach((d,di)=>{ if(chart.isDatasetVisible(di)===false) return; const meta=chart.getDatasetMeta(di), P=pol(d.label), pts=meta.data;
+      const xs=chart.scales.x; if(!xs) return; let row=0;
+      ds.forEach((d,di)=>{ if(chart.isDatasetVisible(di)===false||row>=4) return; const meta=chart.getDatasetMeta(di), P=pol(d.label), pts=meta.data, y=xs.bottom+18+row*27,
+          col=typeof d.borderColor==='string'?d.borderColor:(typeof d.backgroundColor==='string'?d.backgroundColor:'#64748B'), nm=String(d.label||'').slice(0,12);
+        ctx.save(); ctx.font=`700 12px ${D.font.family||'sans-serif'}`; ctx.textAlign='right'; ctx.textBaseline='middle'; const tw=ctx.measureText(nm).width;
+        ctx.fillStyle=col; ctx.beginPath(); ctx.arc(chart.chartArea.left-12-tw,y,4.5,0,7); ctx.fill(); ctx.fillStyle=css('--ink','#222'); ctx.fillText(nm,chart.chartArea.left-6,y); ctx.restore();
         for(let j=1;j<pts.length;j++){ const a=pts[j-1], b=pts[j]; if(!a||!b||a.skip||b.skip) continue; const pc=pctChg(d.data[j-1],d.data[j]); if(pc==null) continue;
-          const gap=Math.abs(b.x-a.x), size=gap>=70?'full':(gap>=44?'min':(gap>=22?'tri':null)); if(!size) continue;
-          let x,y; if(isBar){ x=b.x; y=Math.min(b.y,b.base)-(d.datalabels&&d.datalabels.display===false?18:52); } else { x=(a.x+b.x)/2; y=Math.min(a.y,b.y)-18-di*17; }
-          y=Math.max(chart.chartArea.top-12,y); badge(ctx,x,y,pc,P,size); } });
+          const gap=Math.abs(b.x-a.x), size=gap>=70?'full':(gap>=44?'min':(gap>=22?'tri':null)); if(!size) continue; badge(ctx,(a.x+b.x)/2,y,pc,P,size); }
+        row++; });
     })
   });
 })();
@@ -3809,7 +3813,13 @@ switchTab('summary');
 /* ===== มุมมองการวิเคราะห์: ประสิทธิภาพสะสม / ประสิทธิภาพรายวัน (ใช้กับทุกหัวข้อ) ===== */
 let PERIOD_MODE = 'cum';   // 'cum' = สะสมทั้งช่วงข้อมูล · 'daily' = วันล่าสุดและย้อนหลัง 1 วัน
 let __periodStats = null;
-function includedLegs(){ return LAST_PARSED_LEGS.filter(r=>!(r.routeCode!=null && EXCLUDED_ROUTE_CODES.has(String(r.routeCode)))); }
+var __exnRef=null, __exn=new Set();
+function exclNameSet(){ const re=DATA.route_exclusion; if(re!==__exnRef){ __exnRef=re; __exn=new Set(((re&&re.excluded_routes_detail)||[]).map(x=>x&&x.name?String(x.name).trim().replace(/\s+/g,' '):null).filter(Boolean)); } return __exn; }
+function isExcludedRow(r){
+  const c=r.routeCode; if(c!=null && c!=='') return EXCLUDED_ROUTE_CODES.has(String(c));
+  const ns=exclNameSet(); return !!(ns.size && r.routeName && ns.has(String(r.routeName).trim().replace(/\s+/g,' ')));
+}
+function includedLegs(){ return LAST_PARSED_LEGS.filter(r=>!(isExcludedRow(r))); }
 function legStats(rows){
   applyOncePerDayFine(rows);
   let o=0,d=0,n=0,f=0;
@@ -3819,18 +3829,18 @@ function legStats(rows){
 }
 function getPeriodStats(){
   const ps=__periodStats;
-  if(ps && ps.ref===LAST_PARSED_LEGS && ps.n===LAST_PARSED_LEGS.length && ps.ex===EXCLUDED_ROUTE_CODES.size) return ps;
+  if(ps && ps.ref===LAST_PARSED_LEGS && ps.n===LAST_PARSED_LEGS.length && ps.exset===EXCLUDED_ROUTE_CODES) return ps;
   const inc = includedLegs();
   const days = Array.from(new Set(inc.map(r=>r.opDateStr).filter(Boolean))).sort((a,b)=>parseThaiDMY(a).localeCompare(parseThaiDMY(b)));
   const latest = new Set(days.slice(-2));
   const cum = legStats(inc), daily = legStats(inc.filter(r=>latest.has(r.opDateStr)));
-  return (__periodStats = {ref:LAST_PARSED_LEGS, n:LAST_PARSED_LEGS.length, ex:EXCLUDED_ROUTE_CODES.size, days, latestDays:days.slice(-2), cum, daily});
+  return (__periodStats = {ref:LAST_PARSED_LEGS, n:LAST_PARSED_LEGS.length, exset:EXCLUDED_ROUTE_CODES, days, latestDays:days.slice(-2), cum, daily});
 }
 function applyPeriodMode(mode, force){
   if((!force && mode===PERIOD_MODE) || !LAST_PARSED_LEGS) return;
   const st = getPeriodStats();
   const keepRE = {source_file:(DATA.route_exclusion||{}).source_file, excluded_routes_detail:(DATA.route_exclusion||{}).excluded_routes_detail};
-  let inc = includedLegs(), exc = LAST_PARSED_LEGS.filter(r=>r.routeCode!=null && EXCLUDED_ROUTE_CODES.has(String(r.routeCode)));
+  let inc = includedLegs(), exc = LAST_PARSED_LEGS.filter(r=>isExcludedRow(r));
   if(mode==='daily'){ const ds=new Set(st.latestDays); inc=inc.filter(r=>ds.has(r.opDateStr)); exc=exc.filter(r=>ds.has(r.opDateStr)); }
   const nd = buildAggregatesFromLegs(inc, LAST_PARSED_META.rawRowCount, LAST_PARSED_META.fileName, exc);
   if(nd.route_exclusion){ nd.route_exclusion.source_file=keepRE.source_file; nd.route_exclusion.excluded_routes_detail=keepRE.excluded_routes_detail; }
@@ -3887,7 +3897,7 @@ function cmpRows(from,to,group){
     const iso = r._iso || (r._iso = thaiToISO(r.opDateStr));
     if(iso<from || iso>to) return;
     if(group!=='ALL' && r.veh_group!==group) return;
-    (r.routeCode!=null && EXCLUDED_ROUTE_CODES.has(String(r.routeCode)) ? exc : inc).push(r);
+    (isExcludedRow(r) ? exc : inc).push(r);
   });
   return {inc, exc};
 }
