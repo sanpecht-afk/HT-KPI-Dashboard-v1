@@ -174,6 +174,16 @@ body header.topbar .controls input::placeholder{color:#5A6B86;}
 .th-ico{font-size:30px; line-height:1;} .th-warn.dl .th-ico{color:#FFC93C;} .th-warn.on .th-ico{color:#7CF0A8;}
 .th-sum{display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:14px; margin-top:14px;} .th-sum .ex-ins ul{margin-top:8px;}
 .th-crit{border-left-color:var(--red-strong);} .th-crit b.lead{color:var(--red-strong);}
+/* ===== ปุ่มข้อมูลที่เลือก (บนขวาทุกหน้า) ===== */
+.content-col .camera-bar{display:flex; justify-content:flex-end; align-items:center; gap:14px; flex-wrap:wrap;}
+.daysel{display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end;}
+.daysel-lab{font-weight:800; font-size:13px; color:var(--ink);}
+.content-col .camera-bar .dsb{border-radius:12px; padding:9px 16px; font-size:13.5px; font-weight:800; cursor:pointer; border:2px solid; background:transparent; transition:all .16s ease;}
+.dsb.wd{color:#14994F; border-color:#1E9E57;} .dsb.all{color:#D9691A; border-color:#F08A24;}
+.dsb.wd:hover{background:rgba(30,158,87,.12);} .dsb.all:hover{background:rgba(240,138,36,.12);}
+.content-col .camera-bar .dsb.wd.on{background:linear-gradient(135deg,#1E9E57,#46C57F); color:#fff; border-color:#1E9E57; box-shadow:0 0 0 3px rgba(30,158,87,.25), 0 6px 16px rgba(30,158,87,.4);}
+.content-col .camera-bar .dsb.all.on{background:linear-gradient(135deg,#F08A24,#FFB04D); color:#fff; border-color:#F08A24; box-shadow:0 0 0 3px rgba(240,138,36,.25), 0 6px 16px rgba(240,138,36,.4);}
+.daysel-info{font-size:12px; color:var(--muted); flex-basis:100%; text-align:right;} .daysel-info b{color:var(--ink);}
 /* Dark theme: พื้นหลังน้ำเงินเข้มไล่โทนไปเทาดำ */
 [data-theme="dark"] body, body[data-theme="dark"]{
   background: linear-gradient(165deg, #0D2347 0%, #0B1A33 30%, #0E1524 60%, #0A0C11 100%) fixed;
@@ -541,6 +551,10 @@ footer.note{max-width:1360px; margin:24px auto 60px; padding:0 24px; color:var(-
   <div class="content-col">
     <div id="periodBar" class="period-bar"></div>
     <div class="camera-bar">
+      <div class="daysel" id="daySel"><span class="daysel-lab">ข้อมูลที่เลือก</span>
+        <button type="button" class="dsb wd" data-d="wd" title="ประมวลผลเฉพาะวันจันทร์–ศุกร์ ตัดข้อมูลวันเสาร์และวันอาทิตย์ออก">1. ข้อมูลเฉพาะ จ-ศ</button>
+        <button type="button" class="dsb all on" data-d="all" title="ประมวลผลข้อมูลทุกวัน ไม่ตัดข้อมูลออก">2. ข้อมูลทุกวัน จ-อา</button>
+        <span class="daysel-info" id="daySelInfo"></span></div>
       <button id="cameraExportBtn" title="Export สรุปชีทนี้เป็นรูปภาพ JPG">📷 Export ภาพสรุป (JPG)</button>
     </div>
     <main id="mainArea"></main>
@@ -597,6 +611,7 @@ DATA.trip_details.forEach((t,i)=>{ t._id = i; });
 /* ===== LOGIC v2: จัดประเภทจากคอลัมน์ (เวลามาตรฐาน − เวลาจริง GPS) =====
    ล่าช้า > 30 นาที = Delay | ล่าช้า 0–30 นาที หรือมาก่อนเวลา = On Time | ไม่มีค่า = No Data
    ค่าปรับ: เริ่มนับเมื่อล่าช้า > 30 นาที (31–60 = 500 บาท, > 60 = 2,000 บาท) · ล่าช้า 1–30 นาที ไม่มีค่าปรับ */
+var DAY_FILTER='all';
 var FINE_UPLOAD = {active:false,fileName:'',uploadedAt:'',rows:[],map:new Map(),fmap:new Map(),byPlate:{},matched:new Set(),blank:0};
 const DELAY_THRESHOLD_MIN = 30;
 let LOGIC_COMPARE = null;
@@ -1318,6 +1333,7 @@ function processTripWorkbook(workbook, fileName){
 
 function buildAggregatesFromLegs(ROWS, rawRowCount, fileName, excludedRows){
   excludedRows = excludedRows || [];
+  if(DAY_FILTER==='wd'){ ROWS=ROWS.filter(dayKeep); excludedRows=excludedRows.filter(dayKeep); }  // ตัดวันเสาร์-อาทิตย์
   applyOncePerDayFine(ROWS); // 1 ครั้งต่อทะเบียนต่อวัน
   const routeExcludedCount = excludedRows.length;
 
@@ -1541,7 +1557,7 @@ function applyNewTripData(newData, fileName, opts){
   if(typeof buildExecTab==='function') buildExecTab();
   if(!(opts&&opts.keepMode)) PERIOD_MODE='cum';
   switchTab(opts&&opts.keepTab ? state.tab : 'summary');
-  renderPeriodBar();
+  renderPeriodBar(); if(typeof updateDaySelUI==='function') updateDaySelUI();
 
   document.getElementById('reportMeta').textContent =
     `Report ${DATA.meta.report_no} · ${DATA.meta.date_from} – ${DATA.meta.date_to} · ${DATA.meta.unique_vehicles} ทะเบียน · ${DATA.meta.unique_tickets} เที่ยวขนส่ง(ใบรายการ)`;
@@ -2242,7 +2258,7 @@ function weeklyCalData(){
   });
   const weeks=Object.values(wk).sort((a,b)=>a.mon.localeCompare(b.mon)).map(w=>{
     ['AB','CC','ALL'].forEach(k=>{ const o=w.g[k], g=o.on+o.dl; o.gps=g; o.pctOn=g?o.on/g*100:0; o.pctDelay=g?o.dl/g*100:0; o.pctNd=o.total?o.nd/o.total*100:0; o.avg=o.dl?o.dsum/o.dl:0; });
-    w.no=isoWeekNo(w.mon); w.label=`สัปดาห์ที่ ${w.no} (${wkDM(w.mon)}–${wkDM(w.sun)})`; w.partial=w.days.size<7; w.nDays=w.days.size; return w; });
+    w.no=isoWeekNo(w.mon); w.label=`สัปดาห์ที่ ${w.no} (${wkDM(w.mon)}–${wkDM(w.sun)})`; w.partial=w.days.size<(DAY_FILTER==='wd'?5:7); w.nDays=w.days.size; return w; });
   return {weeks};
 }
 function wkDelta(cur,prev,better){
@@ -2276,7 +2292,7 @@ function renderWeeklyCalendar(sec){
       <div><span>ค่าปรับ (บาท)</span><b>${fmt(c.fine)}</b></div></div>${prev?'<div class="pb-range" style="margin:6px 0 0;">เทียบ '+prev.label+'</div>':''}</div>`; };
   /* ตาราง */
   const body=W.map((w,wi)=>['AB','CC','ALL'].map((k,ki)=>{ const o=w.g[k], p=wi>0?W[wi-1].g[k]:null;
-    return `<tr class="wk-r-${k.toLowerCase()}">${ki===0?`<td rowspan="3" class="wk-wcell"><b>${w.label}</b><br><small>${w.partial?'บางส่วน '+w.nDays+' วัน':'ครบ 7 วัน'}</small></td>`:''}<td><span class="ex-pill ${k.toLowerCase()}">${k==='ALL'?'รวม':k}</span></td>
+    return `<tr class="wk-r-${k.toLowerCase()}">${ki===0?`<td rowspan="3" class="wk-wcell"><b>${w.label}</b><br><small>${w.partial?'บางส่วน '+w.nDays+' วัน':'ครบสัปดาห์'}</small></td>`:''}<td><span class="ex-pill ${k.toLowerCase()}">${k==='ALL'?'รวม':k}</span></td>
       <td>${fmt(o.total)}</td><td>${fmt(o.gps)}</td><td class="g">${fmt(o.on)}</td><td class="r">${fmt(o.dl)}</td><td>${fmt(o.nd)}</td><td class="g">${fmt1(o.pctOn)}%</td><td class="r">${fmt1(o.pctDelay)}%</td><td>${fmt1(o.pctNd)}%</td><td>${fmt1(o.avg)}</td><td>${fmt(o.fine)}</td><td>${wkDelta(o.pctDelay,p&&p.pctDelay,'down')}</td></tr>`; }).join('')).join('');
   window.__wkRows=W.flatMap(w=>['AB','CC','ALL'].map(k=>{ const o=w.g[k]; return {สัปดาห์:w.label,วันที่มีข้อมูล:w.nDays,กลุ่ม:WK_NAME[k],เที่ยวทั้งหมด:o.total,เที่ยวมีGPS:o.gps,OnTime:o.on,Delay:o.dl,NoData:o.nd,'%OnTime':+o.pctOn.toFixed(1),'%Delay':+o.pctDelay.toFixed(1),'%NoData':+o.pctNd.toFixed(1),ล่าช้าเฉลี่ยนาที:+o.avg.toFixed(1),ค่าปรับบาท:o.fine}; }));
   /* สรุปอัตโนมัติ */
@@ -2284,10 +2300,10 @@ function renderWeeklyCalendar(sec){
   ['AB','CC'].forEach(g=>{ const c=last.g[g], p=prev?prev.g[g]:null; ins.push(`<b>${g}</b> ${last.label}: %Delay <b>${fmt1(c.pctDelay)}%</b>${p?` (${dd(c.pctDelay,p.pctDelay)} เทียบสัปดาห์ก่อน)`:''} · %On Time ${fmt1(c.pctOn)}% · ล่าช้าเฉลี่ย ${fmt1(c.avg)} นาที · ค่าปรับ ${fmt(c.fine)} บาท`); });
   const hiG=last.g.AB.pctDelay>=last.g.CC.pctDelay?'AB':'CC'; ins.push(`สัปดาห์ล่าสุด กลุ่ม <b>${hiG}</b> มี %Delay สูงกว่า (AB ${fmt1(last.g.AB.pctDelay)}% vs CC ${fmt1(last.g.CC.pctDelay)}%) — ควรโฟกัสกลุ่มนี้`);
   const worst=W.filter(w=>w.g.ALL.gps>0).sort((a,b)=>b.g.ALL.pctDelay-a.g.ALL.pctDelay)[0]; if(worst&&W.length>1) ins.push(`สัปดาห์ที่ %Delay รวมสูงสุดคือ <b>${worst.label}</b> (${fmt1(worst.g.ALL.pctDelay)}%) ค่าปรับ ${fmt(worst.g.ALL.fine)} บาท`);
-  if(W.some(w=>w.partial)) ins.push('<small>* สัปดาห์ที่มีข้อมูลไม่ครบ 7 วัน (ต้น/ท้ายช่วงข้อมูล) จึงไม่ควรนำไปเทียบกับสัปดาห์เต็มโดยตรง</small>');
+  if(W.some(w=>w.partial)) ins.push('<small>* สัปดาห์ที่มีข้อมูลไม่ครบสัปดาห์ (ต้น/ท้ายช่วงข้อมูล) จึงไม่ควรนำไปเทียบกับสัปดาห์เต็มโดยตรง</small>');
   el.innerHTML=`
     <h3 style="margin:0 0 4px;">📅 สรุปรายสัปดาห์ตามปฏิทิน (จันทร์–อาทิตย์) · แยกผล AB / CC</h3>
-    <div class="nodata-note" style="margin:0 0 10px;">นับตามสัปดาห์ปฏิทินจริง (เริ่มวันจันทร์) · %On Time / %Delay คิดจากเที่ยวที่มี GPS · ค่าปรับเป็นยอดหลังหักตามเงื่อนไขระบบ · สัปดาห์ที่มี * = ข้อมูลไม่ครบ 7 วัน</div>
+    <div class="nodata-note" style="margin:0 0 10px;">นับตามสัปดาห์ปฏิทินจริง (เริ่มวันจันทร์) · %On Time / %Delay คิดจากเที่ยวที่มี GPS · ค่าปรับเป็นยอดหลังหักตามเงื่อนไขระบบ · สัปดาห์ที่มี * = ข้อมูลไม่ครบสัปดาห์</div>
     <div class="pb-cards">${card('AB')}${card('CC')}</div>
     <div class="wk-ctl no-capture"><span class="cmp-lab">ชนิดกราฟ</span><div class="cmp-seg" id="wkType"><button type="button" data-t="bar" class="${WK.type==='bar'?'on':''}">📊 แท่ง</button><button type="button" data-t="line" class="${WK.type==='line'?'on':''}">📈 เส้น</button></div>
       <span class="cmp-lab" style="margin-left:14px;">แสดงกลุ่ม</span><div class="cmp-seg" id="wkGrp">${['AB','CC','ALL'].map(k=>`<button type="button" data-g="${k}" class="${WK.show[k]?'on':''}">${WK_NAME[k]}</button>`).join('')}</div></div>
@@ -3819,7 +3835,9 @@ function isExcludedRow(r){
   const c=r.routeCode; if(c!=null && c!=='') return EXCLUDED_ROUTE_CODES.has(String(c));
   const ns=exclNameSet(); return !!(ns.size && r.routeName && ns.has(String(r.routeName).trim().replace(/\s+/g,' ')));
 }
-function includedLegs(){ return LAST_PARSED_LEGS.filter(r=>!(isExcludedRow(r))); }
+function isWeekdayRow(r){ if(!r.opDateStr) return true; const iso=r._iso||(r._iso=thaiToISO(r.opDateStr)), d=new Date(iso+'T00:00:00Z').getUTCDay(); return d!==0&&d!==6; }
+function dayKeep(r){ return DAY_FILTER!=='wd' || isWeekdayRow(r); }
+function includedLegs(){ return LAST_PARSED_LEGS.filter(r=>!(isExcludedRow(r)) && dayKeep(r)); }
 function legStats(rows){
   applyOncePerDayFine(rows);
   let o=0,d=0,n=0,f=0;
@@ -3829,18 +3847,18 @@ function legStats(rows){
 }
 function getPeriodStats(){
   const ps=__periodStats;
-  if(ps && ps.ref===LAST_PARSED_LEGS && ps.n===LAST_PARSED_LEGS.length && ps.exset===EXCLUDED_ROUTE_CODES) return ps;
+  if(ps && ps.ref===LAST_PARSED_LEGS && ps.n===LAST_PARSED_LEGS.length && ps.exset===EXCLUDED_ROUTE_CODES && ps.day===DAY_FILTER) return ps;
   const inc = includedLegs();
   const days = Array.from(new Set(inc.map(r=>r.opDateStr).filter(Boolean))).sort((a,b)=>parseThaiDMY(a).localeCompare(parseThaiDMY(b)));
   const latest = new Set(days.slice(-2));
   const cum = legStats(inc), daily = legStats(inc.filter(r=>latest.has(r.opDateStr)));
-  return (__periodStats = {ref:LAST_PARSED_LEGS, n:LAST_PARSED_LEGS.length, exset:EXCLUDED_ROUTE_CODES, days, latestDays:days.slice(-2), cum, daily});
+  return (__periodStats = {ref:LAST_PARSED_LEGS, n:LAST_PARSED_LEGS.length, exset:EXCLUDED_ROUTE_CODES, day:DAY_FILTER, days, latestDays:days.slice(-2), cum, daily});
 }
 function applyPeriodMode(mode, force){
   if((!force && mode===PERIOD_MODE) || !LAST_PARSED_LEGS) return;
   const st = getPeriodStats();
   const keepRE = {source_file:(DATA.route_exclusion||{}).source_file, excluded_routes_detail:(DATA.route_exclusion||{}).excluded_routes_detail};
-  let inc = includedLegs(), exc = LAST_PARSED_LEGS.filter(r=>isExcludedRow(r));
+  let inc = includedLegs(), exc = LAST_PARSED_LEGS.filter(r=>isExcludedRow(r) && dayKeep(r));
   if(mode==='daily'){ const ds=new Set(st.latestDays); inc=inc.filter(r=>ds.has(r.opDateStr)); exc=exc.filter(r=>ds.has(r.opDateStr)); }
   const nd = buildAggregatesFromLegs(inc, LAST_PARSED_META.rawRowCount, LAST_PARSED_META.fileName, exc);
   if(nd.route_exclusion){ nd.route_exclusion.source_file=keepRE.source_file; nd.route_exclusion.excluded_routes_detail=keepRE.excluded_routes_detail; }
@@ -3893,7 +3911,7 @@ const CMP_METRICS = [
 function cmpRows(from,to,group){
   const inc=[], exc=[];
   LAST_PARSED_LEGS.forEach(r=>{
-    if(!r.opDateStr) return;
+    if(!r.opDateStr || !dayKeep(r)) return;
     const iso = r._iso || (r._iso = thaiToISO(r.opDateStr));
     if(iso<from || iso>to) return;
     if(group!=='ALL' && r.veh_group!==group) return;
@@ -4255,7 +4273,7 @@ function buildExecTab(refreshOnly){
   sec.innerHTML=`
   <div class="ex-hero">
     <div><div class="ex-kicker">EXECUTIVE SUMMARY</div><h2>สรุปผลผู้บริหาร — KPI เวลาวิ่งรถ HT</h2>
-      <div class="ex-meta">ข้อมูล ${f1} – ${f2} · ${fmt(days.length)} วัน · ${fmt(cum.total)} เที่ยว · ${fmt(new Set(inc.map(r=>r.plate)).size)} ทะเบียน · ประมวลผลล่าสุด ${fineEsc(EXEC_STAMP)}${FINE_UPLOAD.active?' · ค่าปรับสุทธิหลังหักขอยกเว้น':''}</div></div>
+      <div class="ex-meta">ข้อมูล ${f1} – ${f2} · ${fmt(days.length)} วัน · ${fmt(cum.total)} เที่ยว · ${fmt(new Set(inc.map(r=>r.plate)).size)} ทะเบียน · ประมวลผลล่าสุด ${fineEsc(EXEC_STAMP)}${DAY_FILTER==='wd'?' · เฉพาะวันจันทร์–ศุกร์ (ตัด ส–อา)':''}${FINE_UPLOAD.active?' · ค่าปรับสุทธิหลังหักขอยกเว้น':''}</div></div>
     <button id="execCaptureBtn" class="cmp-capture no-capture" type="button">📷 Caption JPG (4K)</button>
   </div>
   <div class="ex-sec"><h3><span class="ex-num">1</span>ภาพรวมประสิทธิภาพสะสม · ประสิทธิภาพรายวัน</h3>
@@ -4293,6 +4311,24 @@ function captureExecJPG(){
 }
 if(typeof TAB_REFRESH_FNS!=='undefined') TAB_REFRESH_FNS.exec=()=>buildExecTab(true);
 buildExecTab();
+
+/* ===== ข้อมูลที่เลือก: (1) เฉพาะ จ–ศ  (2) ทุกวัน จ–อา · ใช้กับทุกชีท ===== */
+function setDayFilter(d){
+  if(d===DAY_FILTER||(d!=='wd'&&d!=='all')) return;
+  DAY_FILTER=d; try{ localStorage.setItem('htDayFilter_v1',d); }catch(e){}
+  __periodStats=null; applyPeriodMode(PERIOD_MODE,true); updateDaySelUI();
+}
+function updateDaySelUI(){
+  const box=document.getElementById('daySel'); if(!box||!LAST_PARSED_LEGS) return;
+  box.querySelectorAll('.dsb').forEach(b=>{ const on=b.dataset.d===DAY_FILTER; b.classList.toggle('on',on); b.setAttribute('aria-pressed',on); });
+  const base=LAST_PARSED_LEGS.filter(r=>!isExcludedRow(r)), keep=base.filter(isWeekdayRow).length, info=document.getElementById('daySelInfo');
+  if(info) info.innerHTML=DAY_FILTER==='wd'?`ใช้ <b>${fmt(keep)}</b> เที่ยว · ตัดข้อมูลวันเสาร์–อาทิตย์ <b>${fmt(base.length-keep)}</b> เที่ยว`:`ใช้ข้อมูลทุกวัน <b>${fmt(base.length)}</b> เที่ยว`;
+}
+(function(){
+  const box=document.getElementById('daySel'); if(box) box.querySelectorAll('.dsb').forEach(b=>b.addEventListener('click',()=>setDayFilter(b.dataset.d)));
+  try{ if(localStorage.getItem('htDayFilter_v1')==='wd'){ DAY_FILTER='wd'; __periodStats=null; applyPeriodMode(PERIOD_MODE,true); } }catch(e){}
+  updateDaySelUI();
+})();
 </script>
 </body>
 </html>
